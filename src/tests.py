@@ -151,6 +151,7 @@ def test_parse_path_maker():
 def test_parse_compare():
     assert parse("name == 'foo'") == Child(Key("name"), Comparison("==", "foo"))
     assert parse("foo == 2") == Child(Key("foo"), Comparison("==", 2))
+    assert parse("foo ==  -3.4") == Child(Key("foo"), Comparison("==", -3.4))
     assert parse("<= 5") == Comparison("<=", 5)
     assert parse("<= 5 .color") == Child(Comparison("<=", 5), Key("color"))
 
@@ -171,6 +172,14 @@ def test_parse_compare():
             Comparison("==", 10)
         )
     )
+
+
+def test_parse_compare_errors():
+    with pytest.raises(ParserError):
+        parse("name ==")
+
+    with pytest.raises(ParserError):
+        parse("name == .")
 
 
 def test_find_key():

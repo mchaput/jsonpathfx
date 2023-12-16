@@ -365,21 +365,28 @@ token_exprs = {
     TKind.close_square: re.compile(r"\s*]\s*"),
 }
 ws_expr = re.compile(r"\s+")
-number_expr = re.compile(r"\b(-?\d+([.]\d*(e\d+)?)?)|([.]\d+([eE]\d*)?)\b")
+number_expr = re.compile(
+    r"-?((\d+([.]\d*(e\d+)?)?)|([.]\d+([eE]\d*)?))"
+)
 simple_key_expr = re.compile(r"^\s*(\w+)\s*$", re.UNICODE)
 simple_path_expr = re.compile(r"^\s*\w+(\s*[.]\w+\s*)+$", re.UNICODE)
 compare_op_expr = re.compile(r"\s*(==|=|!=|<=|<(?!-)|>=|>)\s*")
 
 
 def lex_string(text: str, pos: int) -> tuple[str, int]:
+    if pos >= len(text):
+        raise ParserError("Unexpected end of path string")
+    quote_char = text[pos]
+    if quote_char not in "'\"":
+        raise ParserError(f"Expected string at {pos} found {quote_char!r}")
+
     start_pos = pos
-    end_char = text[pos]
     pos += 1
     prev = pos
     output: list[str] = []
     while pos < len(text):
         char = text[pos]
-        if char == end_char:
+        if char == quote_char:
             if prev < pos:
                 output.append(text[prev:pos])
             return "".join(output), pos + 1
