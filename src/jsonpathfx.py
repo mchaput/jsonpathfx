@@ -53,7 +53,10 @@ class JsonPath:
         raise NotImplementedError
 
     def values(self, data: JsonValue) -> Sequence[JsonValue]:
-        return [datum.value for datum in self.find(data)]
+        return list(self.itervalues(data))
+
+    def itervalues(self, data: JsonValue) -> Iterable[JsonValue]:
+        return (datum.value for datum in self.find(data))
 
 
 class BinaryJsonPath(JsonPath):
@@ -526,7 +529,7 @@ def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
         raise ParserError(f"Expected operator at {tk1.pos} found {tk1}")
 
 
-def fast_keypath(p: str) -> JsonPath:
+def _fast_keypath(p: str) -> JsonPath:
     parts = p.split(".")
     jp = Child(Key(parts[0].strip()), Key(parts[1].strip()))
     for i in range(2, len(parts)):
@@ -538,7 +541,7 @@ def parse(text: str) -> JsonPath:
     if simple_key_expr.match(text):
         return Key(text.strip())
     if simple_path_expr.match(text):
-        return fast_keypath(text)
+        return _fast_keypath(text)
 
     tokens = list(lex(text))
     if not tokens:
