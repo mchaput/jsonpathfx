@@ -47,4 +47,4 @@ list is empty.
 | `path1 <- path2`   | Finds any items that match `path1` that have children that match `path2`.                                                                                          |
 | `path1.parent()`   | Finds the parents of any items that match `path1`                                                                                                                  |
 | `path1.len()`      | Finds the lengths of items that match `path1`.                                                                                                                     |
-| `path1.keys()`     | For dicts that `path1`, this returns the keys. For lists, it returns the items in the list. (Currently this just calls `list()` on  the matches).                  |
+| `path1.keys()`     | For dicts that match `path1`, this returns the keys. For lists, it returns the items in the list. (Currently this just calls `list()` on  the matches).            |
