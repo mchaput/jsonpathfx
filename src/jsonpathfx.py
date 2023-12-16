@@ -412,7 +412,8 @@ def lex(text: str) -> Iterable[Token]:
             op_name = m.group(1)
             op_end = m.end()
             if nm := number_expr.match(text, op_end):
-                value = float(nm.group(0))
+                num_text = nm.group(0)
+                value = float(num_text) if "." in num_text else int(num_text)
                 pos = nm.end()
             else:
                 value, pos = lex_string(text, op_end)
