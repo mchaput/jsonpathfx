@@ -1,7 +1,5 @@
 import pytest
-from jsonpathfx import (parse, Child, Choice, Descendants, Every, Func, Index,
-                        Intersect, Key, Merge, Parent, ParserError, Root, This,
-                        Where)
+from jsonpathfx import *
 
 
 def test_parse_ascii_key():
@@ -143,13 +141,36 @@ def test_parse_paren_mismatch():
 
 
 def test_parse_fn_maker():
-    p = parse("foo.len()")
-    assert p == Child(Key("foo"), Func(len))
+    assert parse("foo.len()") == Child(Key("foo"), Func(len))
 
 
 def test_parse_path_maker():
-    p = parse("foo.parent()")
-    assert p == Child(Key("foo"), Parent())
+    assert parse("foo.parent()") == Child(Key("foo"), Parent())
+
+
+def test_parse_compare():
+    assert parse("name == 'foo'") == Child(Key("name"), Comparison("==", "foo"))
+    assert parse("foo == 2") == Child(Key("foo"), Comparison("==", 2))
+    assert parse("<= 5") == Comparison("<=", 5)
+    assert parse("<= 5 .color") == Child(Comparison("<=", 5), Key("color"))
+
+    p = parse("* <- (type == 'car')")
+    assert p == Where(Every(), Child(Key("type"), Comparison("==", "car")))
+
+    p = parse("* <- (type == 'car').color")
+    assert p == Child(Where(Every(), Child(Key("type"), Comparison("==", "car"))), Key("color"))
+
+    p = parse("* <- look .color == 10")
+    assert p == Child(
+        Where(
+            Every(),
+            Key("look")
+        ),
+        Child(
+            Key("color"),
+            Comparison("==", 10)
+        )
+    )
 
 
 def test_find_key():
@@ -219,8 +240,43 @@ def test_root_parent():
 
 def test_find_where_sibling():
     domain = [
-        {"name": "foo", "size": 2, "extra": True},
-        {"name": "bar", "size": 2},
-        {"name": "baz", "size": 2, "extra": True},
+        {"name": "foo", "size": 3},
+        {"name": "bar"},
+        {"name": "baz", "size": 6},
     ]
-    assert parse("(* <- extra).name").values(domain) == ["foo", "baz"]
+    assert parse("(* <- size).name").values(domain) == ["foo", "baz"]
+
+
+def test_find_every():
+    domain = {
+        "books": {
+            "foo": {"a": 10, "b": 20},
+            "bar": {"a": 30, "b": 40},
+            "baz": {"a": 50, "b": 60},
+        }
+    }
+    assert parse("$.books[*].b").values(domain) == [20, 40, 60]
+
+
+def test_find_compare():
+    domain = {
+        "foo": {"size": 10},
+        "bar": {"size": 20},
+        "baz": {"size": 30},
+    }
+    assert parse("$.*.size > 15").values(domain) == [20, 30]
+
+
+def test_find_compare2():
+    domain = {
+        "foo": {"type": "car", "color": "red"},
+        "bar": {"type": "boat", "color": "blue"},
+        "baz": {"type": "car", "color": "green"},
+    }
+    p = parse("(* <- (type == 'car')).color")
+    assert p.values(domain) == ["red", "green"]
+
+
+def test_find_weird_compare():
+    assert parse("!= 5").values({}) == [{}]
+    assert parse("<= 5 .color").values({}) == []

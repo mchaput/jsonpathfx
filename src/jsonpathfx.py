@@ -1,5 +1,6 @@
 from __future__ import annotations
 import enum
+import operator
 import re
 from typing import Callable, Iterable, NamedTuple, Optional, Sequence, Union
 
@@ -259,6 +260,43 @@ class Func(JsonPath):
         yield datum.push(self.fn(datum.value, *self.args))
 
 
+class Comparison(JsonPath):
+    comparisons: dict[str, Callable[[JsonValue, JsonValue], JsonValue]] = {
+        '!=': operator.ne,
+        '==': operator.eq,
+        '=': operator.eq,
+        '<=': operator.le,
+        '<': operator.lt,
+        '>=': operator.ge,
+        '>': operator.gt,
+        '=~': lambda s, expr: bool(isinstance(s, str) and re.search(expr, s)),
+    }
+
+    def __init__(self, op_name: str, value: JsonValue, pos=0):
+        self.op_name = op_name
+        self.op = self.comparisons[op_name]
+        self.val = value
+        self.pos = pos
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.op_name!r}, {self.val!r})"
+
+    def __hash__(self):
+        return hash(type(self)) ^ hash(self.op) ^ hash(self.val)
+
+    def __eq__(self, other):
+        return (type(self) is type(other) and self.op == other.op and
+                self.val == other.val)
+
+    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
+        datum = ensure(datum)
+        try:
+            if self.op(datum.value, self.val):
+                yield datum
+        except TypeError:
+            pass
+
+
 def func_maker(fn: Callable[[JsonValue], JsonValue]
                ) -> Callable[[], Func]:
     def maker(*args: JsonPath) -> Func:
@@ -291,6 +329,7 @@ class TKind(enum.Enum):
     index = enum.auto()
     slice = enum.auto()
     func = enum.auto()
+    compare = enum.auto()
     open_paren = enum.auto()
     close_paren = enum.auto()
     open_square = enum.auto()
@@ -326,8 +365,10 @@ token_exprs = {
     TKind.close_square: re.compile(r"\s*]\s*"),
 }
 ws_expr = re.compile(r"\s+")
+number_expr = re.compile(r"\b(-?\d+([.]\d*(e\d+)?)?)|([.]\d+([eE]\d*)?)\b")
 simple_key_expr = re.compile(r"^\s*(\w+)\s*$", re.UNICODE)
 simple_path_expr = re.compile(r"^\s*\w+(\s*[.]\w+\s*)+$", re.UNICODE)
+compare_op_expr = re.compile(r"\s*(==|=|!=|<=|<(?!-)|>=|>)\s*")
 
 
 def lex_string(text: str, pos: int) -> tuple[str, int]:
@@ -359,7 +400,17 @@ def lex(text: str) -> Iterable[Token]:
         start = pos
         if text[pos] in "'\"":
             key, pos = lex_string(text, pos)
-            yield Token(TKind.key, (key,), text[start:pos], start)
+            yield Key(key, pos=start)
+        elif m := compare_op_expr.match(text, pos):
+            op_name = m.group(1)
+            op_end = m.end()
+            if nm := number_expr.match(text, op_end):
+                value = float(nm.group(0))
+                pos = nm.end()
+            else:
+                value, pos = lex_string(text, op_end)
+            yield Token(TKind.i_child, (), "", start)
+            yield Comparison(op_name, value, pos=start)
         else:
             for tk, expr in token_exprs.items():
                 if m := expr.match(text, pos):
@@ -404,9 +455,9 @@ binary_ops: dict[TKind, BinaryOpType] = {
     TKind.choice: Choice,
     TKind.merge: Merge,
     TKind.intersect: Intersect,
+    TKind.desc: Descendants,
     TKind.child: Child.make,
     TKind.i_child: Child.make,
-    TKind.desc: Descendants,
     TKind.where: Where,
 }
 binary_op_order = tuple(binary_ops)
@@ -418,7 +469,6 @@ def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
     # groupings (round and square brackets)
     i = 0
     stack: list[int] = []
-    binary_op: Optional[tuple[TKind,]]
     while i < len(tokens):
         token = tokens[i]
         if not isinstance(token, Token):
