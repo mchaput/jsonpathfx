@@ -1,11 +1,11 @@
 from __future__ import annotations
-import dataclasses
 import enum
 import re
 from typing import Callable, Iterable, NamedTuple, Optional, Sequence, Union
 
-JsonValue = Union[int, float, str, list["JsonValue"], tuple,
-dict[str, "JsonValue"], None]
+JsonValue = Union[
+    int, float, str, list["JsonValue"], tuple, dict[str, "JsonValue"], None
+]
 
 
 class ParserError(Exception):
@@ -301,10 +301,6 @@ class Token(NamedTuple):
     pos: int
 
 
-# :len
-#
-
-
 token_exprs = {
     TKind.func: re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*[(]"),
     TKind.root: re.compile(r"\s*[$]\s*"),
@@ -316,7 +312,7 @@ token_exprs = {
     TKind.where: re.compile(r"\s*<-\s*"),
     TKind.choice: re.compile(r"\s*[|][|]\s*"),
     TKind.merge: re.compile(r"\s*[|]\s*"),
-    TKind.intersect: re.compile(r"\s*[&]\s*"),
+    TKind.intersect: re.compile(r"\s*&\s*"),
     TKind.key: re.compile(r"\s*(\w+)\s*", re.UNICODE),
     TKind.index: re.compile(r"\s*\[\s*(-?\d+)\s*]\s*"),
     TKind.slice: re.compile(

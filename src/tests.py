@@ -216,3 +216,11 @@ def test_root_parent():
     }
     assert parse("$.parent()").values(domain) == []
 
+
+def test_find_where_sibling():
+    domain = [
+        {"name": "foo", "size": 2, "extra": True},
+        {"name": "bar", "size": 2},
+        {"name": "baz", "size": 2, "extra": True},
+    ]
+    assert parse("(* <- extra).name").values(domain) == ["foo", "baz"]
