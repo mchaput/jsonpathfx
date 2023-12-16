@@ -1,35 +1,33 @@
 import pytest
-from jsonpathfx import (parse, BracketedKey, Child, Choice, Descendants, Every,
-                        Func, Index, Intersect, Key, Merge, Parent, ParserError,
-                        Root, This, Where)
+from jsonpathfx import (parse, Child, Choice, Descendants, Every, Func, Index,
+                        Intersect, Key, Merge, Parent, ParserError, Root, This,
+                        Where)
 
 
 def test_parse_ascii_key():
-    p = parse("foo")
-    assert p == Key("foo")
+    assert parse("foo") == Key("foo")
 
 
 def test_parse_child():
-    p = parse("foo.bar")
-    assert p == Child(Key("foo"), Key("bar"))
+    assert parse("foo.bar") == Child(Key("foo"), Key("bar"))
 
 
 def test_parse_child_ws():
-    p = parse("foo . bar")
-    assert p == Child(Key("foo"), Key("bar"))
+    assert parse("foo . bar") == Child(Key("foo"), Key("bar"))
 
 
 def test_parse_unicode_key():
-    p = parse("ἰού.πάντʼ")
-    assert p == Child(Key("ἰού"), Key("πάντʼ"))
+    assert parse("ἰού.πάντʼ") == Child(Key("ἰού"), Key("πάντʼ"))
+
+
+def test_parse_no_op():
+    with pytest.raises(ParserError):
+        parse("foo bar")
 
 
 def test_parse_quoted_key():
-    p = parse("'foo.bar'")
-    assert p == Key("foo.bar")
-
-    p = parse('"foo.bar"')
-    assert p == Key("foo.bar")
+    assert parse("'foo.bar'") == Key("foo.bar")
+    assert parse('"foo.bar"') == Key("foo.bar")
 
     with pytest.raises(ParserError):
         parse("'foo")
@@ -45,82 +43,52 @@ def test_parse_quoted_key():
 
 
 def test_parse_bracketed_unquoted_key():
-    p = parse("[foo]")
-    assert p == BracketedKey("foo")
-
-    with pytest.raises(ParserError):
-        parse("[foo.bar]")
+    assert parse("[foo]") == Key("foo")
+    assert parse("foo[bar.baz]") == Child(Key("foo"),
+                                          Child(Key("bar"), Key("baz")))
 
 
 def test_parse_bracketed_quoted_key():
-    p = parse("['foo']")
-    assert p == BracketedKey("foo")
-
-    p = parse('["foo"]')
-    assert p == BracketedKey("foo")
-
-    p = parse('["[foo]"]')
-    assert p == BracketedKey("[foo]")
+    assert parse("['foo']") == Key("foo")
+    assert parse('["foo"]') == Key("foo")
+    assert parse('["[foo]"]') == Key("[foo]")
 
     with pytest.raises(ParserError):
         parse('["foo]"')
 
 
 def test_parse_bracketed_child_key():
-    p = parse("foo[bar]")
-    assert p == Child(Key("foo"), BracketedKey("bar"))
-
-    p = parse("foo[bar]")
-    assert p == Child(Key("foo"), BracketedKey("bar"))
-
-    p = parse("foo.[bar]")
-    assert p == Child(Key("foo"), BracketedKey("bar"))
-
-    p = parse("[foo][bar]")
-    assert p == Child(BracketedKey("foo"), BracketedKey("bar"))
+    assert parse("foo[bar]") == Child(Key("foo"), Key("bar"))
+    assert parse("foo[bar]") == Child(Key("foo"), Key("bar"))
+    assert parse("foo.[bar]") == Child(Key("foo"), Key("bar"))
+    assert parse("[foo][bar]") == Child(Key("foo"), Key("bar"))
 
 
 def test_parse_root():
-    p = parse("$")
-    assert p == Root()
-
-    p = parse("$.foo")
-    assert p == Key("foo")
-
-
-def test_parse_root_as_child():
-    p = parse("foo.$")
-    assert p == Root()
+    assert parse("$") == Root()
+    assert parse("$.foo") == Key("foo")
+    assert parse("foo.$") == Root()
 
 
 def test_parse_this():
-    p = parse("@")
-    assert p == This()
-
-
-def test_parse_this_as_child():
-    p = parse("foo.@")
-    assert p == Key("foo")
+    assert parse("@") == This()
+    assert parse("foo.@") == Key("foo")
 
 
 def test_parse_where():
-    p = parse("foo <- bar")
-    assert p == Where(Key("foo"), Key("bar"))
+    assert parse("foo <- bar") == Where(Key("foo"), Key("bar"))
 
 
 def test_parse_every():
-    p = parse("foo.*")
-    assert p == Child(Key("foo"), Every())
+    assert parse("foo.*") == Child(Key("foo"), Every())
 
 
 def test_parse_descendants():
-    p = parse("foo..bar")
-    assert p == Descendants(Key("foo"), Key("bar"))
+    assert parse("foo..bar") == Descendants(Key("foo"), Key("bar"))
 
 
 def test_parse_choice():
-    p = parse("foo||bar")
-    assert p == Choice(Key("foo"), Key("bar"))
+    assert parse("foo||bar") == Choice(Key("foo"), Key("bar"))
 
 
 def test_parse_choice_and_merge():
@@ -132,47 +100,27 @@ def test_parse_choice_and_merge():
 
 
 def test_intersect():
-    p = parse("foo & bar")
-    assert p == Intersect(Key("foo"), Key("bar"))
+    assert parse("foo & bar") == Intersect(Key("foo"), Key("bar"))
 
 
 def test_parse_index():
-    p = parse("[522]")
-    assert p == Index(522)
-
-    p = parse("[-99]")
-    assert p == Index(-99)
+    assert parse("[522]") == Index(522)
+    assert parse("[-99]") == Index(-99)
 
 
 def test_parse_slice():
-    p = parse("[4:9]")
-    assert p == Index(slice(4, 9))
-
-    p = parse("[4:9:3]")
-    assert p == Index(slice(4, 9, 3))
-
-    p = parse("[-4:9]")
-    assert p == Index(slice(-4, 9))
-
-    p = parse("[4:-100]")
-    assert p == Index(slice(4, -100))
-
-    p = parse("[4:9:-3]")
-    assert p == Index(slice(4, 9, -3))
-
-    p = parse("[4:]")
-    assert p == Index(slice(4, None))
-
-    p = parse("[4::-3]")
-    assert p == Index(slice(4, None, -3))
+    assert parse("[4:9]") == Index(slice(4, 9))
+    assert parse("[4:9:3]") == Index(slice(4, 9, 3))
+    assert parse("[-4:9]") == Index(slice(-4, 9))
+    assert parse("[4:-100]") == Index(slice(4, -100))
+    assert parse("[4:9:-3]") == Index(slice(4, 9, -3))
+    assert parse("[4:]") == Index(slice(4, None))
+    assert parse("[4::-3]") == Index(slice(4, None, -3))
 
 
 def test_parse_child_index():
-    p = parse("foo[5]")
-    assert p == Child(Key("foo"), Index(5))
-
-    p = parse("foo.[5]")
-    assert p == Child(Key("foo"), Index(5))
+    assert parse("foo[5]") == Child(Key("foo"), Index(5))
+    assert parse("foo.[5]") == Child(Key("foo"), Index(5))
 
 
 def test_parse_parens():

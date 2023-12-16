@@ -52,16 +52,6 @@ class JsonPath:
     def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
         raise NotImplementedError
 
-    def child(self, child: JsonPath) -> JsonPath:
-        if isinstance(self, (This, Root)):
-            return child
-        elif isinstance(child, This):
-            return self
-        elif isinstance(child, Root):
-            return child
-        else:
-            return Child(self, child)
-
     def values(self, data: JsonValue) -> Sequence[JsonValue]:
         return [datum.value for datum in self.find(data)]
 
@@ -114,6 +104,17 @@ class Every(JsonPath):
 
 
 class Child(BinaryJsonPath):
+    @classmethod
+    def make(cls, left: JsonPath, right: JsonPath) -> JsonPath:
+        if isinstance(left, (This, Root)):
+            return right
+        elif isinstance(right, This):
+            return left
+        elif isinstance(right, Root):
+            return right
+        else:
+            return Child(left, right)
+
     def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
         for subdatum in self.left.find(ensure(datum)):
             yield from self.right.find(subdatum)
@@ -182,9 +183,8 @@ class Intersect(BinaryJsonPath):
 
 
 class Key(JsonPath):
-    def __init__(self, key: str, bracketed=False, pos=0):
+    def __init__(self, key: str, pos=0):
         self.key = key
-        self.bracketed = bracketed
         self.pos = pos
 
     def __repr__(self):
@@ -205,15 +205,10 @@ class Key(JsonPath):
                 yield datum.push(this[key])
 
 
-class BracketedKey(Key):
-    pass
-
-
 class Index(JsonPath):
     def __init__(self, ix: Union[int, slice], pos=0):
         self.index = ix
         self.pos = pos
-        self.bracketed = True
 
     def __repr__(self):
         return f"{type(self).__name__}({self.index!r})"
@@ -277,10 +272,11 @@ built_in_makers: dict[str, Callable[[], JsonPath]] = {
 }
 
 
-class TokenKind(enum.Enum):
+class TKind(enum.Enum):
     root = enum.auto()
     this = enum.auto()
     child = enum.auto()
+    i_child = enum.auto()
     parent = enum.auto()
     where = enum.auto()
     choice = enum.auto()
@@ -289,17 +285,19 @@ class TokenKind(enum.Enum):
     merge = enum.auto()
     intersect = enum.auto()
     key = enum.auto()
-    br_key = enum.auto()
     index = enum.auto()
     slice = enum.auto()
     func = enum.auto()
     open_paren = enum.auto()
     close_paren = enum.auto()
+    open_square = enum.auto()
+    close_square = enum.auto()
 
 
 class Token(NamedTuple):
-    kind: TokenKind
+    kind: TKind
     strings: tuple[str, ...]
+    source: str
     pos: int
 
 
@@ -308,27 +306,26 @@ class Token(NamedTuple):
 
 
 token_exprs = {
-    TokenKind.func: re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*[(]"),
-    TokenKind.root: re.compile(r"\s*[$]\s*"),
-    TokenKind.this: re.compile(r"\s*@\s*"),
-    TokenKind.every: re.compile(r"\s*[*]\s*"),
-    TokenKind.desc: re.compile(r"\s*[.][.]\s*"),
-    TokenKind.child: re.compile(r"\s*[.]\s*"),
-    TokenKind.parent: re.compile(r"\s*\^\s*"),
-    TokenKind.where: re.compile(r"\s*<-\s*"),
-    TokenKind.choice: re.compile(r"\s*[|][|]\s*"),
-    TokenKind.merge: re.compile(r"\s*[|]\s*"),
-    TokenKind.intersect: re.compile(r"\s*[&]\s*"),
-    TokenKind.key: re.compile(r"\s*(\w+)\s*", re.UNICODE),
-    TokenKind.index: re.compile(r"\s*\[\s*(-?\d+)\s*]\s*"),
-    TokenKind.slice: re.compile(
+    TKind.func: re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*[(]"),
+    TKind.root: re.compile(r"\s*[$]\s*"),
+    TKind.this: re.compile(r"\s*@\s*"),
+    TKind.every: re.compile(r"\s*[*]\s*"),
+    TKind.desc: re.compile(r"\s*[.][.]\s*"),
+    TKind.child: re.compile(r"\s*[.]\s*"),
+    TKind.parent: re.compile(r"\s*\^\s*"),
+    TKind.where: re.compile(r"\s*<-\s*"),
+    TKind.choice: re.compile(r"\s*[|][|]\s*"),
+    TKind.merge: re.compile(r"\s*[|]\s*"),
+    TKind.intersect: re.compile(r"\s*[&]\s*"),
+    TKind.key: re.compile(r"\s*(\w+)\s*", re.UNICODE),
+    TKind.index: re.compile(r"\s*\[\s*(-?\d+)\s*]\s*"),
+    TKind.slice: re.compile(
         r"\s*\[(\s*-?\d+\s*)?:(\s*-?\d+\s*)?(:(-?\d+))?]\s*"),
-    TokenKind.br_key: re.compile(r"\s*\[(\w+)\s*]\s*"),
-    TokenKind.open_paren: re.compile(r"\s*[(]\s*"),
-    TokenKind.close_paren: re.compile(r"\s*[)]\s*"),
+    TKind.open_paren: re.compile(r"\s*[(]\s*"),
+    TKind.close_paren: re.compile(r"\s*[)]\s*"),
+    TKind.open_square: re.compile(r"\s*\[\s*"),
+    TKind.close_square: re.compile(r"\s*]\s*"),
 }
-sq_br_start_expr = re.compile(r"\s*\[\s*(?=['\"])")
-sq_br_end_expr = re.compile(r"\s*]")
 ws_expr = re.compile(r"\s+")
 simple_key_expr = re.compile(r"^\s*(\w+)\s*$", re.UNICODE)
 simple_path_expr = re.compile(r"^\s*\w+(\s*[.]\w+\s*)+$", re.UNICODE)
@@ -363,18 +360,11 @@ def lex(text: str) -> Iterable[Token]:
         start = pos
         if text[pos] in "'\"":
             key, pos = lex_string(text, pos)
-            yield Token(TokenKind.key, (key,), start)
-        elif m := sq_br_start_expr.match(text, pos):
-            key, pos = lex_string(text, m.end())
-            if mm := sq_br_end_expr.match(text, pos):
-                yield Token(TokenKind.br_key, (key,), start)
-                pos = mm.end()
-            else:
-                raise ParserError(f"Expected ] at {pos}")
+            yield Token(TKind.key, (key,), text[start:pos], start)
         else:
             for tk, expr in token_exprs.items():
                 if m := expr.match(text, pos):
-                    yield Token(tk, m.groups(), start)
+                    yield Token(tk, m.groups(), m.group(0), start)
                     pos = m.end()
                     break
             else:
@@ -393,7 +383,7 @@ def slice_index(s: Optional[str]) -> Optional[int]:
 
 
 def binary_reducer(
-        kind: TokenKind, fn: Callable[[JsonPath, JsonPath], JsonPath]
+        kind: TKind, fn: Callable[[JsonPath, JsonPath], JsonPath]
         ) -> Callable[[list[Union[JsonPath, Token]]], Optional[JsonPath]]:
     def reducer(tokens: list[Union[JsonPath, Token]]) -> Optional[JsonPath]:
         for i in range(1, len(tokens)):
@@ -408,48 +398,128 @@ def binary_reducer(
     return reducer
 
 
-def bracketed_item_reducer(tokens: list[Union[JsonPath, Token]]
-                           ) -> Optional[JsonPath]:
-    for i in range(len(tokens) - 1, 0, -1):
-        token = tokens[i]
-        if isinstance(token, (BracketedKey, Index)):
-            prev = tokens[i - 1]
-            if not isinstance(prev, JsonPath):
-                raise ParserError(
-                    f"Can't apply key/index to {prev} at {token.pos}")
-            left = tokens[:i]
-            right = tokens[i:]
-            return reduce(left).child(reduce(right))
-
-
-# The ordering here defines the binding priority of the operators, from loosest
-# to tightest
-binary_ops: Sequence[Callable[[list[Union[JsonPath, Token]]], JsonPath]] = (
-    binary_reducer(TokenKind.choice, Choice),
-    binary_reducer(TokenKind.merge, Merge),
-    binary_reducer(TokenKind.intersect, Intersect),
-    binary_reducer(TokenKind.child, lambda left, right: left.child(right)),
-    bracketed_item_reducer,
-    binary_reducer(TokenKind.desc, Descendants),
-    binary_reducer(TokenKind.where, Where),
-)
+# The ordering in this dict defines the binding priority of the operators, from
+# loosest to tightest
+BinaryOpType = Callable[[JsonPath, JsonPath], JsonPath]
+binary_ops: dict[TKind, BinaryOpType] = {
+    TKind.choice: Choice,
+    TKind.merge: Merge,
+    TKind.intersect: Intersect,
+    TKind.child: Child.make,
+    TKind.i_child: Child.make,
+    TKind.desc: Descendants,
+    TKind.where: Where,
+}
+binary_op_order = tuple(binary_ops)
 
 
 def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
     assert tokens
-    tk0 = tokens[0]
-    if not isinstance(tk0, JsonPath):
-        raise ParserError(f"Parser error: {tk0} at {tk0.pos}")
-    elif len(tokens) == 1:
-        return tk0
+    # Replace atomic tokens with their JsonPath equivalent, and also handle
+    # groupings (round and square brackets)
+    i = 0
+    stack: list[int] = []
+    binary_op: Optional[tuple[TKind,]]
+    while i < len(tokens):
+        token = tokens[i]
+        if not isinstance(token, Token):
+            i += 1
+            continue
+        kind = token.kind
+        if kind == TKind.root:
+            tokens[i] = Root(token.pos)
+        elif kind == TKind.this:
+            tokens[i] = This(token.pos)
+        elif kind == TKind.parent:
+            tokens[i] = Parent(token.pos)
+        elif kind == TKind.every:
+            tokens[i] = Every(token.pos)
+        elif kind == TKind.key:
+            tokens[i] = Key(token.strings[0], pos=token.pos)
+        elif kind == TKind.index:
+            ix = slice_index(token.strings[0])
+            tokens[i:i + 1] = [Token(TKind.i_child, (), "", token.pos),
+                               Index(ix, pos=token.pos)]
+        elif kind == TKind.slice:
+            start = slice_index(token.strings[0])
+            end = slice_index(token.strings[1])
+            step = slice_index(token.strings[3])
+            tokens[i:i + 1] = [Token(TKind.i_child, (), "", token.pos),
+                               Index(slice(start, end, step), pos=token.pos)]
+            i = i + 2
+            continue
+        elif kind in (TKind.open_paren, TKind.func,
+                      TKind.open_square):
+            stack.append(i)
+        elif kind == TKind.close_square:
+            open_index = stack.pop()
+            open_square = tokens[open_index]
+            if open_square.kind != TKind.open_square:
+                raise ParserError(f"Unbalanced paren {token} at {token.pos}")
+            body = tokens[open_index + 1:i]
+            if not body:
+                del tokens[open_index:i + 1]
+                i = open_index
+                continue
+            tokens[open_index:i + 1] = [Token(TKind.i_child, (), "", token.pos),
+                                        reduce(body)]
+            i = open_index + 2
+            continue
+        elif kind == TKind.close_paren:
+            if not stack:
+                raise ParserError(f"Unbalenced close paren at {token.pos}")
+            open_index = stack.pop()
+            open_paren = tokens[open_index]
+            if open_paren.kind not in (TKind.func, TKind.open_paren):
+                raise ParserError(f"Unbalanced paren {token} at {token.pos}")
+            is_func = open_paren.kind == TKind.func
+            body = tokens[open_index + 1:i]
+            if not body and not is_func:
+                del tokens[open_index:i + 1]
+                i = open_index
+                continue
 
-    for fn in binary_ops:
-        if r := fn(tokens):
-            return r
+            repl = [reduce(body)] if body else []
+            if is_func:
+                maker = built_in_makers[open_paren.strings[0]]
+                repl = [maker(*repl)]
+            tokens[open_index:i + 1] = repl
+            i = open_index + 1
+            continue
+        i += 1
 
     if not tokens:
         raise ParserError("String reduced to an empty path")
-    elif len(tokens) == 1:
+    tk0 = tokens[0]
+    if isinstance(tokens[0], Token) and tk0.kind == TKind.i_child:
+        del tokens[0]
+
+    # Find the loosest binary operator in this token list, recursively reduce
+    # the sub-lists on either side, then combine them with the op
+    bin_op: Optional[tuple[int, int]] = None  # op_index, op_priority
+    for i, token in enumerate(tokens):
+        if isinstance(token, Token) and token.kind in binary_ops:
+            pri = binary_op_order.index(token.kind)
+            if bin_op is None or pri < bin_op[1]:
+                bin_op = i, pri
+    if bin_op:
+        op_index = bin_op[0]
+        op_token = tokens[op_index]
+        operator = binary_ops[op_token.kind]
+        left = tokens[:op_index]
+        if not left:
+            raise ParserError(
+                f"Left side of {op_token} is empty at {op_token.pos}")
+        right = tokens[op_index + 1:]
+        if not right:
+            raise ParserError(
+                f"Right side of {op_token} is empty at {op_token.pos}")
+        return operator(reduce(left), reduce(right))
+
+    if not tokens:
+        raise ParserError("String reduced to an empty path")
+
+    if len(tokens) == 1:
         tk0 = tokens[0]
         if isinstance(tk0, JsonPath):
             return tk0
@@ -475,57 +545,6 @@ def parse(text: str) -> JsonPath:
         return fast_keypath(text)
 
     tokens = list(lex(text))
-    i = 0
-    open_parens: list[int] = []
-    while i < len(tokens):
-        token = tokens[i]
-        kind = token.kind
-        if kind == TokenKind.root:
-            tokens[i] = Root(token.pos)
-        elif kind == TokenKind.this:
-            tokens[i] = This(token.pos)
-        elif kind == TokenKind.parent:
-            tokens[i] = Parent(token.pos)
-        elif kind == TokenKind.every:
-            tokens[i] = Every(token.pos)
-        elif kind == TokenKind.key:
-            tokens[i] = Key(token.strings[0], pos=token.pos)
-        elif kind == TokenKind.br_key:
-            tokens[i] = BracketedKey(token.strings[0], pos=token.pos)
-        elif kind == TokenKind.index:
-            ix = slice_index(token.strings[0])
-            tokens[i] = Index(ix, pos=token.pos)
-        elif kind == TokenKind.slice:
-            print("strings=", token.strings)
-            start = slice_index(token.strings[0])
-            end = slice_index(token.strings[1])
-            step = slice_index(token.strings[3])
-            tokens[i] = Index(slice(start, end, step), pos=token.pos)
-        elif kind == TokenKind.open_paren or kind == TokenKind.func:
-            open_parens.append(i)
-        elif kind == TokenKind.close_paren:
-            if not open_parens:
-                raise ParserError(f"Unbalenced close paren at {token.pos}")
-            start = open_parens.pop()
-            op = tokens[start]
-            is_func = op.kind == TokenKind.func
-            body = tokens[start + 1:i]
-            if not body and not is_func:
-                del tokens[start:i + 1]
-                i = start
-                continue
-
-            repl = [reduce(body)] if body else []
-            if is_func:
-                maker = built_in_makers[op.strings[0]]
-                repl = [maker(*repl)]
-            tokens[start:i + 1] = repl
-            i = start + 1
-            continue
-        i += 1
-
     if not tokens:
         raise ParserError("Parse error: no tokens")
     return reduce(tokens)
-
-
