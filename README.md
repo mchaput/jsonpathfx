@@ -36,9 +36,9 @@ list is empty.
 | `@`                | The current object.                                                                                                                                                |
 | `key`              | Looks up the string in the current dictionary.                                                                                                                     |
 | `'key'` or `"key"` | Looks up the string in the current dictionary. Use this for keys with non-alphanumeric characters. You can escape a character inside the quotes using a backslash. |
-| `path1[path2]`     | Same as `path1.(path2)`                                                                                                                                            |
 | `[num]`            | Looks up the `num`th item in the current list. You can also use Python slice syntax, such as `[1:-2]` or `[::2]`                                                   |
 | `path1.path2`      | Finds items that match `path2` that are children of items matching `path1`.                                                                                        |
+| `path1[path2]`     | Same as `path1.(path2)`                                                                                                                                            |
 | `path1..path2`     | Recursively finds items that match `path2` that are descendants of of items matching `path1`.                                                                      |
 | `*`                | Returns every item in the current list or every value in the current dict.                                                                                         |
 | ``path1 \| path2`` | Finds any items that match `path1` and also any items that match `path2` (union).                                                                                  |
