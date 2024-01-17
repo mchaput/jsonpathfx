@@ -64,14 +64,6 @@ list is empty.
 
 ## Grouping
 
-TKind.choice: Choice,
-    TKind.merge: Merge,
-    TKind.intersect: Intersect,
-    TKind.desc: Descendants,
-    TKind.child: Child.make,
-    TKind.i_child: Child.make,
-    TKind.where: Where,
-
 * Operators have the following relative binding strength, from *loosest* to *tightest* binding:
   * `|` (union)
   * `&` (intersect)
