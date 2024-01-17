@@ -116,7 +116,8 @@ class Root(JsonPath):
 
 class This(JsonPath):
     def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        yield ensure(match)
+        match = ensure(match)
+        yield match.push(match.value, match)
 
 
 class Parent(JsonPath):
@@ -240,9 +241,12 @@ class Key(JsonPath):
         match = ensure(match)
         this = match.value
         if isinstance(this, dict):
-            key = self.key
-            if key in this:
-                yield match.push(key, this[key])
+            try:
+                value = this[self.key]
+            except KeyError:
+                return
+            else:
+                yield match.push(self.key, value)
 
 
 class Index(JsonPath):
@@ -431,6 +435,7 @@ simple_key_expr = re.compile(r"^\s*(\w+)\s*$", re.UNICODE)
 simple_path_expr = re.compile(r"^\s*\w+(\s*[.]\w+\s*)+$", re.UNICODE)
 compare_op_expr = re.compile(r"\s*(==|=|!=|<=|<(?!-)|>=|>)\s*")
 bind_expr = re.compile(r"<([A-Za-z_]+[A-Za-z0-9_]*)>")
+
 
 def lex_string(text: str, pos: int) -> tuple[str, int]:
     if pos >= len(text):
