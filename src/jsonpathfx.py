@@ -204,12 +204,12 @@ class Merge(BinaryJsonPath):
     def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
         match = ensure(match)
         seen: set[int] = set()
-        for match in self.left.find(match):
-            yield match
-            seen.add(id(match.value))
-        for match in self.right.find(match):
-            if id(match.value) not in seen:
-                yield match
+        for subm in self.left.find(match):
+            yield subm
+            seen.add(id(subm.value))
+        for subm in self.right.find(match):
+            if id(subm.value) not in seen:
+                yield subm
 
 
 class Intersect(BinaryJsonPath):

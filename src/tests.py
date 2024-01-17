@@ -302,6 +302,27 @@ def test_find_descendents():
     assert parse("$..mike").values(domain) == ["j", "i"]
 
 
+def test_find_merge():
+    domain = {
+        "geo": {
+            "detail": [
+                {"name": "a"},
+                {"name": "b"},
+                {"name": "c"}
+            ],
+            "point": [
+                {"name": "d"},
+            ],
+            "vertex": [
+                {"name": "e"},
+                {"name": "f"},
+            ]
+        }
+    }
+    p = parse("geo.(detail|point|vertex).*.name")
+    assert p.values(domain) == ["a", "b", "c", "d", "e", "f"]
+
+
 def test_find_compare():
     domain = {
         "foo": {"size": 10},
@@ -398,3 +419,25 @@ def test_match_index_bindings():
         {"k": "echo", "x": 1},
         {"k": "hotel", "x": 0}
     ]
+
+
+def test_merge_binding():
+    domain = {
+        "geo": {
+            "detail": [
+                {"name": "a"},
+                {"name": "b"},
+                {"name": "c"}
+            ],
+            "point": [
+                {"name": "d"},
+            ],
+            "vertex": [
+                {"name": "e"},
+                {"name": "f"},
+            ]
+        }
+    }
+    p = parse("geo.(detail|point|vertex)<comp>.*.name")
+    comps = [m.bindings()["comp"] for m in p.find(domain)]
+    assert comps == ["detail", "detail", "detail", "point", "vertex", "vertex"]
