@@ -26,6 +26,12 @@ assert jp.values({"foo": {"bar": 10, "baz": 20}}) == [10]
 # You can get the matches as a generator instead of a list
 for value in jp.itervalues({"foo": {"bar": 10, "baz": 20}}):
     print(value)
+
+# You can get Match objects with a few useful methods if needed
+for match in jp.find(data):
+    print("The value of this match is:", match.value)
+    print("The path to this match is:", match.path())
+    print("The bound key values for this match are:", match.bindings())
 ```
 
 `JsonPath.values()` always returns a list of all the values in the given
@@ -54,6 +60,7 @@ list is empty.
 | `path1.keys()`     | For dicts that match `path1`, this returns the keys. For lists, it returns the items in the list. (Currently this just calls `list()` on  the matches). |
 | `path1 > 5`        | Finds matches of `path1` that return true for the given comparison. You can use `==`, `=`, `!=`, `<`, `<=`, `>`, or `>=`.                               |  
 | `type == "car"`    | Compares the matchs to a string. With strings you can use an additional operator `=~` which treats the right-hand string as a regular expression.       |
+| `path<name>`       | Binds the _key_ or _index_ that matched in the path to the given name (see "bindings" below)                                                            |
 
 ## Grouping
 
@@ -84,4 +91,30 @@ of putting the right-hand "contains" path in parentheses when using it.
 
 ## Examples
 
+## Bindings
 
+Sometimes it's useful to know which key/index of several options inside a path
+actually matched  for each result. For example, if you have a path such as:
+
+```
+geometry.(points|vertices|faces).rows.*
+```
+
+...You might want to know if it was under a `points`, `vertices`, or `faces`
+key. To get this information, you can _bind_ that key expression to a name such
+as `component`:
+
+```
+geometry.(points|vertices|faces)<component>.rows.*
+```
+
+Then, you can retrieve the bindings for each match from the `Match` objects
+returned by `JsonPath.find()`:
+
+```python
+from jsonpathfx import parse
+
+jp = parse("geometry.(points|vertices|faces)<component>.rows.*")
+for match in jp.find(my_data):
+    print("value=", match.value, "bindings=", match.bindings())
+```

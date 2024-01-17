@@ -13,31 +13,47 @@ class ParserError(Exception):
     pass
 
 
-class Datum(NamedTuple):
+class Match(NamedTuple):
     value: JsonValue
-    parents: tuple[Datum, ...]
+    key: str | int | None
+    parents: tuple[Match, ...]
+    name: Optional[str] = None
 
     @property
-    def root(self) -> Datum:
+    def root(self) -> Match:
         if self.parents:
             return self.parents[0]
         else:
             return self
 
-    def push(self, value: JsonValue) -> Datum:
-        return Datum(value, self.parents + (self,))
+    def push(self, match: str|int|None, value: JsonValue, name: str = None
+             ) -> Match:
+        return Match(value, match, self.parents + (self,), name)
+
+    def path(self) -> Sequence[str|int|None]:
+        return tuple(p.key for p in self.parents[1:]) + (self.key,)
+
+    def bindings(self) -> dict[str, JsonValue]:
+        if self.parents:
+            bindings = self.parents[-1].bindings()
+        else:
+            bindings = {}
+        if self.name:
+            bindings[self.name] = self.key
+        return bindings
 
 
-def ensure(value: Union[JsonValue, Datum]) -> Datum:
-    if isinstance(value, Datum):
+def ensure(value: Union[JsonValue, Match]) -> Match:
+    if isinstance(value, Match):
         return value
     else:
-        return Datum(value, ())
+        return Match(value, None, ())
 
 
 class JsonPath:
-    def __init__(self, pos=0):
-        self.pos = pos
+    def __init__(self, *, start=0, end=0):
+        self._start = start
+        self._end = end
 
     def __repr__(self):
         return f"<{type(self).__name__}>"
@@ -50,18 +66,27 @@ class JsonPath:
         # Good enough for "singletons"; classes with parameters should override
         return hash(type(self))
 
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
         raise NotImplementedError
 
     def values(self, data: JsonValue) -> Sequence[JsonValue]:
         return list(self.itervalues(data))
 
     def itervalues(self, data: JsonValue) -> Iterable[JsonValue]:
-        return (datum.value for datum in self.find(data))
+        return (match.value for match in self.find(data))
+
+    @property
+    def start(self) -> int:
+        return self._start
+
+    @property
+    def end(self) -> int:
+        return self._end
 
 
 class BinaryJsonPath(JsonPath):
     def __init__(self, left: JsonPath, right: JsonPath):
+        super().__init__()
         self.left = left
         self.right = right
 
@@ -76,35 +101,45 @@ class BinaryJsonPath(JsonPath):
         return hash(type(self)) ^ hash(self.left) ^ hash(self.right)
 
     @property
-    def pos(self):
-        return self.left.pos
+    def start(self) -> int:
+        return self.left.start
+
+    @property
+    def end(self) -> int:
+        return self.right.end
 
 
 class Root(JsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        yield ensure(datum).root
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        yield ensure(match).root
 
 
 class This(JsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        yield ensure(datum)
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        yield ensure(match)
 
 
 class Parent(JsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        if ensure(datum).parents:
-            yield datum.parents[-1]
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        if ensure(match).parents:
+            yield match.parents[-1]
 
 
 class Every(JsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
-        v = datum.value
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        v = match.value
         if isinstance(v, dict):
-            v = v.values()
-        if hasattr(v, "__iter__"):
-            for subval in v:
-                yield datum.push(subval)
+            for key, value in v.items():
+                yield match.push(key, value)
+        else:
+            try:
+                iterator = iter(v)
+            except TypeError:
+                return
+            else:
+                for i, subval in enumerate(iterator):
+                    yield match.push(i, subval)
 
 
 class Child(BinaryJsonPath):
@@ -119,77 +154,78 @@ class Child(BinaryJsonPath):
         else:
             return Child(left, right)
 
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        for subdatum in self.left.find(ensure(datum)):
-            yield from self.right.find(subdatum)
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        for subm in self.left.find(ensure(match)):
+            yield from self.right.find(subm)
 
 
 class Where(BinaryJsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
-        for subdatum in self.left.find(datum):
-            for _ in self.right.find(subdatum):
-                yield subdatum
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        for subm in self.left.find(match):
+            for _ in self.right.find(subm):
+                yield subm
                 break
 
 
 class Descendants(BinaryJsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
 
-        def match_recursively(d: Datum) -> Iterable[Datum]:
-            for match in self.right.find(d):
-                yield match
+        def match_recursively(this: Match) -> Iterable[Match]:
+            for m in self.right.find(this):
+                yield m
 
-            val = d.value
-            if isinstance(val, (list, tuple, dict)):
-                subvals: Sequence[JsonValue] = (val.values()
-                                                if isinstance(d, dict) else val)
-                for subval in subvals:
-                    yield from match_recursively(d.push(subval))
+            val = this.value
+            if isinstance(val, dict):
+                for key, subval in val.items():
+                    yield from match_recursively(this.push(key, subval))
+            elif isinstance(val, (list, tuple)):
+                for i, subval in enumerate(val):
+                    yield from match_recursively(this.push(i, subval))
 
-        for left_match in self.left.find(datum):
+        for left_match in self.left.find(match):
             yield from match_recursively(left_match)
 
 
 class Choice(BinaryJsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
         left_matched = False
-        for match in self.left.find(datum):
+        for match in self.left.find(match):
             yield match
             left_matched = True
         if not left_matched:
-            yield from self.right.find(datum)
+            yield from self.right.find(match)
 
 
 # Don't call this Union, that's a type annotation!
 class Merge(BinaryJsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
         seen: set[int] = set()
-        for match in self.left.find(datum):
+        for match in self.left.find(match):
             yield match
             seen.add(id(match.value))
-        for match in self.right.find(datum):
+        for match in self.right.find(match):
             if id(match.value) not in seen:
                 yield match
 
 
 class Intersect(BinaryJsonPath):
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
-        left_matches = list(self.left.find(datum))
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        left_matches = list(self.left.find(match))
         seen = set(id(d.value) for d in left_matches)
-        for match in self.right.find(datum):
+        for match in self.right.find(match):
             if id(match.value) in seen:
                 yield match
 
 
 class Key(JsonPath):
-    def __init__(self, key: str, pos=0):
+    def __init__(self, key: str, *, start=0, end=0):
+        super().__init__(start=start, end=end)
         self.key = key
-        self.pos = pos
 
     def __repr__(self):
         return f"{type(self).__name__}({self.key!r})"
@@ -200,19 +236,19 @@ class Key(JsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.key)
 
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
-        this = datum.value
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        this = match.value
         if isinstance(this, dict):
             key = self.key
             if key in this:
-                yield datum.push(this[key])
+                yield match.push(key, this[key])
 
 
 class Index(JsonPath):
-    def __init__(self, ix: Union[int, slice], pos=0):
+    def __init__(self, ix: Union[int, slice], start=0, end=0):
+        super().__init__(start=start, end=end)
         self.index = ix
-        self.pos = pos
 
     def __repr__(self):
         return f"{type(self).__name__}({self.index!r})"
@@ -223,28 +259,49 @@ class Index(JsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.index)
 
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
-        this = datum.value
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        this = match.value
         if isinstance(this, (list, tuple)):
             ix = self.index
-            try:
-                subval = this[ix]
-            except IndexError:
-                return
             if isinstance(ix, int):
-                yield datum.push(subval)
-            elif isinstance(ix, slice) and isinstance(subval, (list, tuple)):
-                for sv in subval:
-                    yield datum.push(sv)
+                try:
+                    yield match.push(ix, this[ix])
+                except IndexError:
+                    return
+            elif isinstance(ix, slice):
+                start, stop, step = ix.indices(len(this))
+                for i in range(start, stop, step):
+                    yield match.push(i, this[i])
+
+
+class Bind(JsonPath):
+    def __init__(self, name: str, child: JsonPath, start=0, end=0):
+        super().__init__(start=start, end=end)
+        self.name = name
+        self.child = child
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.name})"
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.name == other.name
+
+    def __hash__(self):
+        return hash(type(self)) ^ hash(self.name)
+
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        for found in self.child.find(match):
+            yield match.push(found.key, found.value, self.name)
 
 
 class Func(JsonPath):
     def __init__(self, fn: Callable[[JsonValue], JsonValue],
-                 args: Sequence[JsonPath] = (), pos=0):
+                 args: Sequence[JsonPath] = (), start=0, end=0):
+        super().__init__(start=start, end=end)
         self.fn = fn
         self.args = args
-        self.pos = pos
 
     def __repr__(self):
         return f"{type(self).__name__}({self.fn!r})"
@@ -255,9 +312,9 @@ class Func(JsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.fn)
 
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
-        yield datum.push(self.fn(datum.value, *self.args))
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        yield match.push(None, self.fn(match.value, *self.args))
 
 
 class Comparison(JsonPath):
@@ -272,11 +329,11 @@ class Comparison(JsonPath):
         '=~': lambda s, expr: bool(isinstance(s, str) and re.search(expr, s)),
     }
 
-    def __init__(self, op_name: str, value: JsonValue, pos=0):
+    def __init__(self, op_name: str, value: JsonValue, start=0, end=0):
+        super().__init__(start=start, end=end)
         self.op_name = op_name
         self.op = self.comparisons[op_name]
         self.val = value
-        self.pos = pos
 
     def __repr__(self):
         return f"{type(self).__name__}({self.op_name!r}, {self.val!r})"
@@ -288,11 +345,11 @@ class Comparison(JsonPath):
         return (type(self) is type(other) and self.op == other.op and
                 self.val == other.val)
 
-    def find(self, datum: Union[JsonValue, Datum]) -> Iterable[Datum]:
-        datum = ensure(datum)
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
         try:
-            if self.op(datum.value, self.val):
-                yield datum
+            if self.op(match.value, self.val):
+                yield match
         except TypeError:
             pass
 
@@ -317,7 +374,7 @@ class TKind(enum.Enum):
     root = enum.auto()
     this = enum.auto()
     child = enum.auto()
-    i_child = enum.auto()
+    implicit_child = enum.auto()
     parent = enum.auto()
     where = enum.auto()
     choice = enum.auto()
@@ -334,13 +391,15 @@ class TKind(enum.Enum):
     close_paren = enum.auto()
     open_square = enum.auto()
     close_square = enum.auto()
+    bind = enum.auto()
 
 
 class Token(NamedTuple):
     kind: TKind
     strings: tuple[str, ...]
     source: str
-    pos: int
+    start: int
+    end: int
 
 
 token_exprs = {
@@ -371,7 +430,7 @@ number_expr = re.compile(
 simple_key_expr = re.compile(r"^\s*(\w+)\s*$", re.UNICODE)
 simple_path_expr = re.compile(r"^\s*\w+(\s*[.]\w+\s*)+$", re.UNICODE)
 compare_op_expr = re.compile(r"\s*(==|=|!=|<=|<(?!-)|>=|>)\s*")
-
+bind_expr = re.compile(r"<([A-Za-z_]+[A-Za-z0-9_]*)>")
 
 def lex_string(text: str, pos: int) -> tuple[str, int]:
     if pos >= len(text):
@@ -407,7 +466,11 @@ def lex(text: str) -> Iterable[Token]:
         start = pos
         if text[pos] in "'\"":
             key, pos = lex_string(text, pos)
-            yield Key(key, pos=start)
+            yield Key(key, start=start, end=pos)
+        elif m := bind_expr.match(text, pos):
+            yield Token(TKind.bind, (m.group(1),), m.group(0),
+                        m.start(), m.end())
+            pos = m.end()
         elif m := compare_op_expr.match(text, pos):
             op_name = m.group(1)
             op_end = m.end()
@@ -417,13 +480,13 @@ def lex(text: str) -> Iterable[Token]:
                 pos = nm.end()
             else:
                 value, pos = lex_string(text, op_end)
-            yield Token(TKind.i_child, (), "", start)
-            yield Comparison(op_name, value, pos=start)
+            yield Token(TKind.implicit_child, (), "", start, start)
+            yield Comparison(op_name, value, start=start, end=op_end)
         else:
             for tk, expr in token_exprs.items():
                 if m := expr.match(text, pos):
-                    yield Token(tk, m.groups(), m.group(0), start)
                     pos = m.end()
+                    yield Token(tk, m.groups(), m.group(0), start, pos)
                     break
             else:
                 if m := ws_expr.match(text, pos):
@@ -451,7 +514,7 @@ def binary_reducer(
                 right = tokens[i + 1:]
                 if not right:
                     raise ParserError(
-                        f"Expected value after {token} at {token.pos}")
+                        f"Expected value after {token} at {token.start}")
                 return fn(reduce(left), reduce(right))
     return reducer
 
@@ -465,7 +528,7 @@ binary_ops: dict[TKind, BinaryOpType] = {
     TKind.intersect: Intersect,
     TKind.desc: Descendants,
     TKind.child: Child.make,
-    TKind.i_child: Child.make,
+    TKind.implicit_child: Child.make,
     TKind.where: Where,
 }
 binary_op_order = tuple(binary_ops)
@@ -484,25 +547,29 @@ def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
             continue
         kind = token.kind
         if kind == TKind.root:
-            tokens[i] = Root(token.pos)
+            tokens[i] = Root(start=token.start, end=token.end)
         elif kind == TKind.this:
-            tokens[i] = This(token.pos)
+            tokens[i] = This(start=token.start, end=token.end)
         elif kind == TKind.parent:
-            tokens[i] = Parent(token.pos)
+            tokens[i] = Parent(start=token.start, end=token.end)
         elif kind == TKind.every:
-            tokens[i] = Every(token.pos)
+            tokens[i] = Every(start=token.start, end=token.end)
         elif kind == TKind.key:
-            tokens[i] = Key(token.strings[0], pos=token.pos)
+            tokens[i] = Key(token.strings[0], start=token.start, end=token.end)
         elif kind == TKind.index:
             ix = slice_index(token.strings[0])
-            tokens[i:i + 1] = [Token(TKind.i_child, (), "", token.pos),
-                               Index(ix, pos=token.pos)]
+            tokens[i:i + 1] = [
+                Token(TKind.implicit_child, (), "", token.start, token.start),
+                Index(ix, start=token.start, end=token.end)
+            ]
         elif kind == TKind.slice:
             start = slice_index(token.strings[0])
             end = slice_index(token.strings[1])
             step = slice_index(token.strings[3])
-            tokens[i:i + 1] = [Token(TKind.i_child, (), "", token.pos),
-                               Index(slice(start, end, step), pos=token.pos)]
+            tokens[i:i + 1] = [
+                Token(TKind.implicit_child, (), "", token.start, token.start),
+                Index(slice(start, end, step), start=token.start, end=token.end)
+            ]
             i = i + 2
             continue
         elif kind in (TKind.open_paren, TKind.func,
@@ -512,23 +579,25 @@ def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
             open_index = stack.pop()
             open_square = tokens[open_index]
             if open_square.kind != TKind.open_square:
-                raise ParserError(f"Unbalanced paren {token} at {token.pos}")
+                raise ParserError(f"Unbalanced paren {token} at {token.start}")
             body = tokens[open_index + 1:i]
             if not body:
                 del tokens[open_index:i + 1]
                 i = open_index
                 continue
-            tokens[open_index:i + 1] = [Token(TKind.i_child, (), "", token.pos),
-                                        reduce(body)]
+            tokens[open_index:i + 1] = [
+                Token(TKind.implicit_child, (), "", token.start, token.start),
+                reduce(body)
+            ]
             i = open_index + 2
             continue
         elif kind == TKind.close_paren:
             if not stack:
-                raise ParserError(f"Unbalenced close paren at {token.pos}")
+                raise ParserError(f"Unbalenced close paren at {token.start}")
             open_index = stack.pop()
             open_paren = tokens[open_index]
             if open_paren.kind not in (TKind.func, TKind.open_paren):
-                raise ParserError(f"Unbalanced paren {token} at {token.pos}")
+                raise ParserError(f"Unbalanced paren {token} at {token.start}")
             is_func = open_paren.kind == TKind.func
             body = tokens[open_index + 1:i]
             if not body and not is_func:
@@ -543,12 +612,23 @@ def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
             tokens[open_index:i + 1] = repl
             i = open_index + 1
             continue
+        elif kind == TKind.bind:
+            if i == 0 or not tokens:
+                raise ParserError(
+                    f"Binding must follow an expression at {token.start}"
+                )
+            name = token.strings[0]
+            previous = tokens[i - 1]
+            assert isinstance(previous, JsonPath)
+            tokens[i - 1:i + 1] = [Bind(name, previous)]
+            continue
+
         i += 1
 
     if not tokens:
         raise ParserError("String reduced to an empty path")
     tk0 = tokens[0]
-    if isinstance(tokens[0], Token) and tk0.kind == TKind.i_child:
+    if isinstance(tokens[0], Token) and tk0.kind == TKind.implicit_child:
         del tokens[0]
 
     # Find the loosest binary operator in this token list, recursively reduce
@@ -566,11 +646,11 @@ def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
         left = tokens[:op_index]
         if not left:
             raise ParserError(
-                f"Left side of {op_token} is empty at {op_token.pos}")
+                f"Left side of {op_token} is empty at {op_token.start}")
         right = tokens[op_index + 1:]
         if not right:
             raise ParserError(
-                f"Right side of {op_token} is empty at {op_token.pos}")
+                f"Right side of {op_token} is empty at {op_token.start}")
         return operator(reduce(left), reduce(right))
 
     if not tokens:
@@ -581,10 +661,10 @@ def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
         if isinstance(tk0, JsonPath):
             return tk0
         else:
-            raise ParserError(f"Parser error: {tk0} at {tk0.pos}")
+            raise ParserError(f"Parser error: {tk0} at {tk0.start}")
     else:
         tk1 = tokens[1]
-        raise ParserError(f"Expected operator at {tk1.pos} found {tk1}")
+        raise ParserError(f"Expected operator at {tk1.start} found {tk1}")
 
 
 def _fast_keypath(p: str) -> JsonPath:

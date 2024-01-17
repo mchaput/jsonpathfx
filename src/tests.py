@@ -182,6 +182,17 @@ def test_parse_compare_errors():
         parse("name == .")
 
 
+def test_parse_bind():
+    p = parse("foo.*<x>.bar")
+    assert p == Child(
+        Key("foo"),
+        Child(
+            Bind("x", Every()),
+            Key("bar")
+        )
+    )
+
+
 def test_find_key():
     domain = {
         "foo": 10,
@@ -267,6 +278,30 @@ def test_find_every():
     assert parse("$.books[*].b").values(domain) == [20, 40, 60]
 
 
+def test_find_descendents():
+    domain = {
+        "alfa": {
+            "bravo": "a",
+            "charlie": "b",
+            "delta": "c"
+        },
+        "echo": {
+            "foxtrot": "d",
+            "golf": "e",
+            "mike": "j"
+        },
+        "hotel": {
+            "india": "f",
+            "juliet": "g",
+            "kilo": {
+                "lima": "h",
+                "mike": "i"
+            }
+        }
+    }
+    assert parse("$..mike").values(domain) == ["j", "i"]
+
+
 def test_find_compare():
     domain = {
         "foo": {"size": 10},
@@ -289,3 +324,77 @@ def test_find_compare2():
 def test_find_weird_compare():
     assert parse("!= 5").values({}) == [{}]
     assert parse("<= 5 .color").values({}) == []
+
+
+def test_match_path():
+    domain = {
+        "alfa": {
+            "bravo": "a",
+            "charlie": "b",
+            "delta": "c"
+        },
+        "echo": {
+            "foxtrot": "d",
+            "golf": "e",
+        },
+        "hotel": {
+            "india": "f",
+            "juliet": "g",
+            "kilo": {
+                "lima": "h",
+                "mike": "i"
+            }
+        }
+    }
+    p = parse("*.*")
+    assert p.values(domain) == ['a', 'b', 'c', 'd', 'e', 'f', 'g',
+                                 {'lima': 'h', 'mike': 'i'}]
+
+    assert [m.path() for m in p.find(domain)] == [
+        ("alfa", "bravo"), ("alfa", "charlie"), ("alfa", "delta"),
+        ("echo", "foxtrot"), ("echo", "golf"), ("hotel", "india"),
+        ("hotel", "juliet"), ("hotel", "kilo")
+    ]
+
+
+def test_match_bindings():
+    domain = {
+        "alfa": {
+            "bravo": "a",
+            "charlie": "b",
+            "delta": "c"
+        },
+        "echo": {
+            "foxtrot": "d",
+            "golf": "e",
+            "mike": "j"
+        },
+        "hotel": {
+            "india": "f",
+            "juliet": "g",
+            "kilo": {
+                "lima": "h",
+                "mike": "i"
+            }
+        }
+    }
+    p = parse("*<top>..mike")
+    assert p.values(domain) == ["j", "i"]
+    assert [m.bindings() for m in p.find(domain)] == [
+        {"top": "echo"},
+        {"top": "hotel"}
+    ]
+
+
+def test_match_index_bindings():
+    domain = {
+        "alfa": ["a", "b", "c", "d"],
+        "echo": ["c", "d", "e", "f"],
+        "hotel": ["d", "e", "f", "g"]
+    }
+    p = parse("*<k>.(* == 'd')<x>")
+    assert [m.bindings() for m in p.find(domain)] == [
+        {"k": "alfa", "x": 3},
+        {"k": "echo", "x": 1},
+        {"k": "hotel", "x": 0}
+    ]
