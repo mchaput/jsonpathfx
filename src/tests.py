@@ -26,6 +26,8 @@ def test_parse_no_op():
 def test_parse_quoted_key():
     assert parse("'foo.bar'") == Key("foo.bar")
     assert parse('"foo.bar"') == Key("foo.bar")
+    assert parse("'foo\\'bar'") == Key("foo'bar")
+    assert parse('"foo\\"bar"') == Key('foo"bar')
 
     with pytest.raises(ParserError):
         parse("'foo")
@@ -42,6 +44,9 @@ def test_parse_quoted_key():
 
 def test_parse_bracketed_unquoted_key():
     assert parse("[foo]") == Key("foo")
+
+
+def test_bracketed_subexpression():
     assert parse("foo[bar.baz]") == Child(Key("foo"),
                                           Child(Key("bar"), Key("baz")))
 
@@ -77,6 +82,11 @@ def test_parse_where():
     assert parse("foo <- bar") == Where(Key("foo"), Key("bar"))
 
 
+def test_parse_where_multi():
+    p = parse("foo <- bar <- baz")
+    assert p == Where(Where(Key("foo"), Key("bar")), Key("baz"))
+
+
 def test_parse_every():
     assert parse("foo.*") == Child(Key("foo"), Every())
 
@@ -86,15 +96,21 @@ def test_parse_descendants():
 
 
 def test_parse_choice():
-    assert parse("foo||bar") == Choice(Key("foo"), Key("bar"))
+    assert parse("foo||bar") == Or(Key("foo"), Key("bar"))
 
 
 def test_parse_choice_and_merge():
+    p = parse("foo|bar|baz")
+    assert p == Merge(Merge(Key("foo"), Key("bar")), Key("baz"))
+
+    p = parse("foo||bar||baz")
+    assert p == Or(Or(Key("foo"), Key("bar")), Key("baz"))
+
     p = parse("foo||bar|baz")
-    assert p == Choice(Key("foo"), Merge(Key("bar"), Key("baz")))
+    assert p == Merge(Or(Key("foo"), Key("bar")), Key("baz"))
 
     p = parse("foo|bar||baz")
-    assert p == Choice(Merge(Key("foo"), Key("bar")), Key("baz"))
+    assert p == Merge(Key("foo"), Or(Key("bar"), Key("baz")))
 
 
 def test_intersect():
@@ -105,6 +121,9 @@ def test_parse_index():
     assert parse("[522]") == Index(522)
     assert parse("[-99]") == Index(-99)
 
+    with pytest.raises(ParserError):
+        parse("[1.2]")
+
 
 def test_parse_slice():
     assert parse("[4:9]") == Index(slice(4, 9))
@@ -114,6 +133,8 @@ def test_parse_slice():
     assert parse("[4:9:-3]") == Index(slice(4, 9, -3))
     assert parse("[4:]") == Index(slice(4, None))
     assert parse("[4::-3]") == Index(slice(4, None, -3))
+    assert parse("[::-3]") == Index(slice(None, None, -3))
+    assert parse("[::]") == Index(slice(None, None, None))
 
 
 def test_parse_child_index():
@@ -129,7 +150,7 @@ def test_parse_parens():
     assert p == Merge(Child(Key("a"), Key("b")), Child(Key("c"), Key("d")))
 
     p = parse("a.(b|c).d")
-    assert p == Child(Key('a'), Child(Merge(Key('b'), Key('c')), Key('d')))
+    assert p == Child(Child(Key('a'), Merge(Key('b'), Key('c'))), Key('d'))
 
 
 def test_parse_paren_mismatch():
@@ -140,8 +161,8 @@ def test_parse_paren_mismatch():
         parse("a.b)")
 
 
-def test_parse_fn_maker():
-    assert parse("foo.len()") == Child(Key("foo"), Func(len))
+def test_parse_len():
+    assert parse("foo.len()") == Child(Key("foo"), FilterFunction(len))
 
 
 def test_parse_path_maker():
@@ -149,28 +170,45 @@ def test_parse_path_maker():
 
 
 def test_parse_compare():
-    assert parse("name == 'foo'") == Child(Key("name"), Comparison("==", "foo"))
-    assert parse("foo == 2") == Child(Key("foo"), Comparison("==", 2))
-    assert parse("foo ==  -3.4") == Child(Key("foo"), Comparison("==", -3.4))
-    assert parse("<= 5") == Comparison("<=", 5)
-    assert parse("<= 5 .color") == Child(Comparison("<=", 5), Key("color"))
+    assert parse("name == 'foo'") == Comparison(Key("name"), "==", Literal("foo"))
+    assert parse("foo == 2") == Comparison(Key("foo"), "==", Literal(2))
+    assert parse("foo ==  -3.4") == Comparison(Key("foo"), "==", Literal(-3.4))
 
     p = parse("* <- (type == 'car')")
-    assert p == Where(Every(), Child(Key("type"), Comparison("==", "car")))
+    assert p == Where(Every(), Comparison(Key("type"), "==", Literal("car")))
 
     p = parse("* <- (type == 'car').color")
-    assert p == Child(Where(Every(), Child(Key("type"), Comparison("==", "car"))), Key("color"))
+    assert p == Where(
+        Every(),
+        Child(
+            Comparison(Key("type"), "==", Literal("car")),
+            Key("color")
+        )
+    )
 
     p = parse("* <- look .color == 10")
-    assert p == Child(
-        Where(
-            Every(),
-            Key("look")
-        ),
-        Child(
-            Key("color"),
-            Comparison("==", 10)
+    assert p == Where(
+        Every(),
+        Comparison(
+            Child(
+                Key("look"),
+                Key("color")
+            ),
+            "==",
+            Literal(10)
         )
+    )
+
+
+def test_parse_compare_compound_path():
+    p = parse("$.*.size > 15")
+    assert p == Comparison(
+        Child(
+            Every(),
+            Key("size")
+        ),
+        ">",
+        Literal(15)
     )
 
 
@@ -183,14 +221,24 @@ def test_parse_compare_errors():
 
 
 def test_parse_bind():
-    p = parse("foo.*<x>.bar")
+    p = parse("foo.x:*.bar")
     assert p == Child(
-        Key("foo"),
         Child(
-            Bind("x", Every()),
-            Key("bar")
-        )
+            Key("foo"),
+            Bind(Every(), "x"),
+        ),
+        Key("bar")
     )
+
+
+def test_parse_math():
+    assert parse("foo + 5") == Math(Key("foo"), "+", Literal(5))
+    assert parse("foo - bar") == Math(Key("foo"), "-", Key("bar"))
+    assert parse("6.5 * bar") == Math(Literal(6.5), "-", Key("bar"))
+
+
+def test_parse_math_every():
+    assert parse("* * *") == Math(Every(), "*", Every())
 
 
 def test_find_key():
@@ -342,9 +390,22 @@ def test_find_compare2():
     assert p.values(domain) == ["red", "green"]
 
 
-def test_find_weird_compare():
-    assert parse("!= 5").values({}) == [{}]
-    assert parse("<= 5 .color").values({}) == []
+def test_compare_to_path():
+    domain = {
+        "foo": [1, 2, 3, 4, 5, 6, 7],
+        "cutoff": 4
+    }
+    p = parse("foo.* < cutoff")
+    assert p.values(domain) == [1, 2, 3]
+
+
+def test_compare_type_mismatch():
+    domain = {
+        "foo": [1, 2, 3, 4, 5, 6, 7],
+        "cutoff": "x"
+    }
+    p = parse("foo.* < cutoff")
+    assert p.values(domain) == []
 
 
 def test_match_path():
@@ -399,7 +460,7 @@ def test_match_bindings():
             }
         }
     }
-    p = parse("*<top>..mike")
+    p = parse("top:*..mike")
     assert p.values(domain) == ["j", "i"]
     assert [m.bindings() for m in p.find(domain)] == [
         {"top": "echo"},
@@ -413,7 +474,7 @@ def test_match_index_bindings():
         "echo": ["c", "d", "e", "f"],
         "hotel": ["d", "e", "f", "g"]
     }
-    p = parse("*<k>.(* == 'd')<x>")
+    p = parse("k:*.(x:* == 'd')")
     assert [m.bindings() for m in p.find(domain)] == [
         {"k": "alfa", "x": 3},
         {"k": "echo", "x": 1},
@@ -438,6 +499,15 @@ def test_merge_binding():
             ]
         }
     }
-    p = parse("geo.(detail|point|vertex)<comp>.*.name")
+    p = parse("geo.comp:(detail|point|vertex).*.name")
     comps = [m.bindings()["comp"] for m in p.find(domain)]
     assert comps == ["detail", "detail", "detail", "point", "vertex", "vertex"]
+
+
+def test_find_math():
+    domain = {
+        "foo": [1, 2, 3, 4, 5],
+        "bar": 10
+    }
+    p = parse("foo.* * bar")
+    assert p.values(domain) == [10, 20, 30, 40, 50]

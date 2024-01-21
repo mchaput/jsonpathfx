@@ -40,46 +40,42 @@ list is empty.
 
 ## Syntax
 
-| **Syntax**         | **Description**                                                                                                                                         |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `$`                | The root object.                                                                                                                                        |
-| `@`                | The current object.                                                                                                                                     |
-| `key`              | Looks up the string in the current dictionary.                                                                                                          |
-| `'key'` or `"key"` | Looks up the string in the current dictionary. Use this for keys with non-alphanumeric characters. You can escape characters using backslash.           |
-| `[num]`            | Looks up the `num`th item in the current list. You can also use Python slice syntax, such as `[1:-2]` or `[::2]`                                        |
-| `path1.path2`      | Finds items that match `path2` that are children of items matching `path1`.                                                                             |
-| `path1[path2]`     | Same as `path1.(path2)`                                                                                                                                 |
-| `path1..path2`     | Recursively finds items that match `path2` that are descendants of of items matching `path1`.                                                           |
-| `*`                | Returns every item in the current list or every value in the current dict.                                                                              |
-| ``path1 \| path2`` | Finds any items that match `path1` and also any items that match `path2` (union).                                                                       |
-| `path1 & path2`    | Finds any items that match *both* `path1` and `path2` (intersection).                                                                                   |
-| `path1 \|\| path2` | If any items match `path1`, this expression returns those items. Otherwise, it returns any items that match `path2` (or).                               |
-| `path1 <- path2`   | Finds any items that match `path1` that have children that match `path2` (contains).                                                                    |
-| `path1.parent()`   | Finds the parents of any items that match `path1`                                                                                                       |
-| `path1.len()`      | Finds the lengths of items that match `path1`.                                                                                                          |
-| `path1.keys()`     | For dicts that match `path1`, this returns the keys. For lists, it returns the items in the list. (Currently this just calls `list()` on  the matches). |
-| `path1 > 5`        | Finds matches of `path1` that return true for the given comparison. You can use `==`, `=`, `!=`, `<`, `<=`, `>`, or `>=`.                               |  
-| `type == "car"`    | Compares the matchs to a string. With strings you can use an additional operator `=~` which treats the right-hand string as a regular expression.       |
-| `path<name>`       | Binds the _key_ or _index_ that matched in the path to the given name (see "bindings" below)                                                            |
+| **Syntax**         | **Description**                                                                                                                                               |
+|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `$`                | The root object.                                                                                                                                              |
+| `@`                | The current object.                                                                                                                                           |
+| `key`              | Looks up the string in the current dictionary.                                                                                                                |
+| `'key'` or `"key"` | Looks up the string in the current dictionary. Use this for keys with non-alphanumeric characters. You can escape characters using backslash.                 |
+| `[num]`            | Looks up the `num`th item in the current list. You can also use Python slice syntax, such as `[1:-2]` or `[::2]`                                              |
+| `path1.path2`      | Finds items that match `path2` that are children of items matching `path1`.                                                                                   |
+| `path1[path2]`     | Same as `path1.(path2)`                                                                                                                                       |
+| `path1..path2`     | Recursively finds items that match `path2` that are descendants of of items matching `path1`.                                                                 |
+| `*`                | Returns every item in the current list or every value in the current dict.                                                                                    |
+| ``path1 \| path2`` | Finds any items that match `path1` and also any items that match `path2` (union).                                                                             |
+| `path1 & path2`    | Finds any items that match *both* `path1` and `path2` (intersection).                                                                                         |
+| `path1 \|\| path2` | If any items match `path1`, this expression returns those items. Otherwise, it returns any items that match `path2` (or).                                     |
+| `path1 <- path2`   | Finds any items that match `path1` that have children that match `path2` (contains).                                                                          |
+| `path1.parent()`   | Finds the parents of any items that match `path1`                                                                                                             |
+| `path1.len()`      | Finds the lengths of items that match `path1`.                                                                                                                |
+| `path1.keys()`     | For dicts that match `path1`, this returns the keys.                                                                                                          |
+| `path1 > 5`        | Finds matches of `path1` that return true for the given comparison. You can use `==`, `=`, `!=`, `<`, `<=`, `>`, or `>=`.                                     |  
+| `type == "car"`    | Compares the matchs to a string. With strings you can use an additional operator `=~` which treats the right-hand string as a regular expression.             |
+| `path1 + path2`    | Yields the results of applying an operator (`+`, `-`, `*`, or `/`) between all the matches from `path1` and the first match in `path2`. Only matches numbers. |
+| `name:path`        | Binds the _key_ or _index_ that matched in the path to the given name (see "bindings" below)                                                                  |
 
 ## Grouping
 
 * Operators have the following relative binding strength, from *loosest* to *tightest* binding:
-  * `|` (union)
-  * `&` (intersect)
-  * `..` (descendants)
-  * `.` / `[]` / comparison
   * `<-` (contains)
+  * Comparisons
+  * `&` (intersect)
+  * `|` (union)
+  * `||` (or)
+  * `+` `-`
+  * `*` `/`
+  * `.` (child)
+  * `name:` (bind)
 * You can use parentheses (`()`) to group clauses.
-* You should generally group the right side of the `<-` operator in parentheses.
-
-For example, `* <- look.color` will parse like `(* <- look).color`.
-That is, it will find the `color` value of items that have a `look` key.
-If what you  wanted instead was to match match items that have a `look` key with
-a `color` key inside, you should use `* <- (look.color)`.
-
-Because `<-` is so strongly binding, it's a good idea to just get in the habit
-of putting the right-hand "contains" path in parentheses when using it.
 
 ## Examples
 
@@ -97,7 +93,7 @@ key. To get this information, you can _bind_ that key expression to a name such
 as `component`:
 
 ```
-geometry.(points|vertices|faces)<component>.rows.*
+geometry.component:(points|vertices|faces).rows.*
 ```
 
 Then, you can retrieve the bindings for each match from the `Match` objects
@@ -106,7 +102,7 @@ returned by `JsonPath.find()`:
 ```python
 from jsonpathfx import parse
 
-jp = parse("geometry.(points|vertices|faces)<component>.rows.*")
+jp = parse("geometry.component:(points|vertices|faces).rows.*")
 for match in jp.find(my_data):
     print("value=", match.value, "bindings=", match.bindings())
 ```

@@ -1,16 +1,198 @@
 from __future__ import annotations
+
+import ast
 import enum
 import operator
 import re
-from typing import Callable, Iterable, NamedTuple, Optional, Sequence, Union
+from typing import (Any, Callable, Iterable, NamedTuple, Optional, Pattern,
+                    Sequence, Union)
 
 JsonValue = Union[
     int, float, str, list["JsonValue"], tuple, dict[str, "JsonValue"], None
 ]
+LexerFn = Callable[[str, int], Optional[tuple["Token", int]]]
 
 
 class ParserError(Exception):
     pass
+
+
+class Kind(enum.Enum):
+    eof = enum.auto()
+    root = enum.auto()  # $
+    this = enum.auto()  # @
+    child = enum.auto()  # .
+    desc = enum.auto()  # ..
+    where = enum.auto()  # <-
+    star = enum.auto()  # *
+    merge = enum.auto()  # |
+    or_ = enum.auto()  # ||
+    intersect = enum.auto()  # &
+    open_paren = enum.auto()  # (
+    close_paren = enum.auto()  # )
+    open_square = enum.auto()  # [
+    close_square = enum.auto()  # ]
+    comma = enum.auto()  # ,
+    colon = enum.auto()  # :
+    # apply = enum.auto()  # name(
+    name = enum.auto()  # name
+    number = enum.auto()  # 1
+    string = enum.auto()  # 'string'
+    bind = enum.auto()  # <name>
+    plus = enum.auto()  # +
+    minus = enum.auto()  # -
+    divide = enum.auto()  # /
+    neg = enum.auto()  # !
+    less_than = enum.auto()  # <
+    less_than_eq = enum.auto()  # <=
+    equals = enum.auto()  # ==
+    greater_than = enum.auto()  # >
+    greater_than_eq = enum.auto()  # >=
+    not_eq = enum.auto()  # !=
+    regex = enum.auto()  # ~=
+
+
+class Precedence(enum.IntEnum):
+    where = 1
+    comparison = 2
+    binary = 3
+    intersect = 4
+    merge = 5
+    or_ = 6
+    sum = 7
+    product = 8
+    child = 11
+    postfix = 12
+    bind = 20
+    call = 100
+
+
+class Token(NamedTuple):
+    kind: Kind
+    payload: Any
+    pos: int
+
+
+ws_expr = re.compile(r"\s+")
+# slice_expr = re.compile(r"(\s*-?\d+\s*)?:(\s*-?\d+\s*)?(:-?\d+)?")
+
+
+def get_keys(value: JsonValue) -> JsonValue:
+    if isinstance(value, dict):
+        return list(value)
+    else:
+        return []
+
+
+def regex_compare(expr: JsonValue, target: JsonValue) -> bool:
+    if isinstance(expr, str) and isinstance(target, str):
+        return bool(re.search(expr, target))
+    return False
+
+
+def lex_string_literal(text: str, pos: int) -> Optional[tuple[Token, int]]:
+    quote_char = text[pos]
+    if quote_char not in "'\"":
+        return
+
+    start_pos = pos
+    pos += 1
+    prev = pos
+    string = ""
+    while pos < len(text):
+        char = text[pos]
+        if char == quote_char:
+            if prev < pos:
+                string += text[prev:pos]
+            return Token(Kind.string, string, start_pos), pos + 1
+        elif text[pos] == "\\" and pos < len(text) - 1:
+            if prev < pos:
+                string += text[prev:pos]
+            string += text[pos + 1]
+            pos += 2
+            prev = pos
+        else:
+            pos += 1
+
+
+# def lex_slice(text: str, pos: int) -> Optional[tuple[Token, int]]:
+#     if m := slice_expr.match(text, pos):
+#         start = int(m.group(1))
+#         stop = int(m.group(2)) if m.group(2) else None
+#         step = int(m.group(3)[1:]) if m.group(3) else None
+#         return Token(Kind.slice, (start, stop, step), pos), m.end()
+
+
+token_exprs: dict[Kind, Union[str, Pattern, LexerFn]] = {
+    # The order is significant! For strings that share a prefix, the longer
+    # should come first
+    Kind.root: "$",
+    Kind.this: "@",
+    Kind.desc: "..",
+    Kind.child: ".",
+    Kind.where: "<-",
+    Kind.star: "*",
+    Kind.or_: "||",
+    Kind.merge: "|",
+    Kind.intersect: "&",
+    Kind.open_paren: "(",
+    Kind.close_paren: ")",
+    Kind.open_square: "[",
+    Kind.close_square: "]",
+    Kind.comma: ",",
+    Kind.colon: ":",
+    # Kind.apply: re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*[(]")
+    Kind.number: re.compile(r"(-?\d+([.]\d*(e\d+)?)?)|([.]\d+([eE]\d*)?)"),
+    Kind.bind: re.compile(r"(\w+):", re.UNICODE),
+    Kind.name: re.compile(r"(\w+)", re.UNICODE),
+    Kind.string: lex_string_literal,
+    # Kind.slice: lex_slice,
+    Kind.plus: "+",
+    Kind.minus: "-",
+    Kind.divide: "/",
+    Kind.less_than_eq: "<=",
+    Kind.less_than: "<",
+    Kind.equals: re.compile("(==?)"),
+    Kind.greater_than_eq: ">=",
+    Kind.greater_than: ">",
+    Kind.not_eq: "!=",
+    Kind.neg: "!",
+    Kind.regex: "~="
+}
+
+
+def lex_token(text: str, pos: int) -> Optional[tuple[Token, int]]:
+    for kind, expr in token_exprs.items():
+        if isinstance(expr, str):
+            if text.startswith(expr, pos):
+                return Token(kind, expr, pos), pos + len(expr)
+        elif callable(expr):
+            result = expr(text, pos)
+            if result:
+                return result
+        elif m := expr.match(text, pos):
+            return Token(kind, m.group(1), pos), m.end()
+
+
+def lex(text: str) -> Sequence[Token]:
+    pos = 0
+    tokens: list[Token] = []
+    while pos < len(text):
+        if m := ws_expr.match(text, pos):
+            pos = m.end()
+            if pos == len(text):
+                break
+
+        result = lex_token(text, pos)
+        if not result:
+            raise ParserError(f"Can't parse {text[pos]!r} at {pos}")
+        token, new_pos = result
+        if new_pos <= pos:
+            raise ParserError(f"Parsing went backwards at {pos}: "
+                              f"{token} -> {new_pos}")
+        pos = new_pos
+        tokens.append(token)
+    return tokens
 
 
 class Match(NamedTuple):
@@ -26,11 +208,11 @@ class Match(NamedTuple):
         else:
             return self
 
-    def push(self, match: str|int|None, value: JsonValue, name: str = None
+    def push(self, key: str | int | None, value: JsonValue, name: str = None
              ) -> Match:
-        return Match(value, match, self.parents + (self,), name)
+        return Match(value, key, self.parents + (self,), name)
 
-    def path(self) -> Sequence[str|int|None]:
+    def path(self) -> Sequence[str | int | None]:
         return tuple(p.key for p in self.parents[1:]) + (self.key,)
 
     def bindings(self) -> dict[str, JsonValue]:
@@ -51,9 +233,8 @@ def ensure(value: Union[JsonValue, Match]) -> Match:
 
 
 class JsonPath:
-    def __init__(self, *, start=0, end=0):
-        self._start = start
-        self._end = end
+    def __init__(self):
+        self._pos = -1
 
     def __repr__(self):
         return f"<{type(self).__name__}>"
@@ -75,16 +256,16 @@ class JsonPath:
     def itervalues(self, data: JsonValue) -> Iterable[JsonValue]:
         return (match.value for match in self.find(data))
 
-    @property
-    def start(self) -> int:
-        return self._start
+    def pos(self) -> int:
+        return self._pos
 
-    @property
-    def end(self) -> int:
-        return self._end
+    def set_pos(self, pos: int) -> None:
+        self._pos = pos
 
 
 class BinaryJsonPath(JsonPath):
+    # Abstract base path for binary path operators
+
     def __init__(self, left: JsonPath, right: JsonPath):
         super().__init__()
         self.left = left
@@ -100,13 +281,28 @@ class BinaryJsonPath(JsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.left) ^ hash(self.right)
 
-    @property
-    def start(self) -> int:
-        return self.left.start
+    def pos(self) -> int:
+        return self.left.pos()
 
-    @property
-    def end(self) -> int:
-        return self.right.end
+    def set_pos(self, pos: int) -> None:
+        self.left.set_pos(pos)
+
+
+class UnaryJsonPath(JsonPath):
+    # Abstract base path for unary path operators
+
+    def __init__(self, child: JsonPath):
+        super().__init__()
+        self.child = child
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.child!r})"
+
+    def pos(self) -> int:
+        return self.child.pos()
+
+    def set_pos(self, pos: int) -> None:
+        self.child.pos = pos
 
 
 class Root(JsonPath):
@@ -124,6 +320,24 @@ class Parent(JsonPath):
     def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
         if ensure(match).parents:
             yield match.parents[-1]
+
+
+class Literal(JsonPath):
+    def __init__(self, literal: Union[int, float, str]):
+        super().__init__()
+        self.literal = literal
+
+    def __hash__(self):
+        return hash(type(self)) ^ hash(self.literal)
+
+    def __eq__(self, other: Literal):
+        return type(self) is type(other) and self.literal == other.literal
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.literal!r})"
+
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        yield match.push(self.literal, self.literal)
 
 
 class Every(JsonPath):
@@ -189,7 +403,7 @@ class Descendants(BinaryJsonPath):
             yield from match_recursively(left_match)
 
 
-class Choice(BinaryJsonPath):
+class Or(BinaryJsonPath):
     def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
         match = ensure(match)
         left_matched = False
@@ -200,7 +414,7 @@ class Choice(BinaryJsonPath):
             yield from self.right.find(match)
 
 
-# Don't call this Union, that's a type annotation!
+# Can't call this Union, that's a type annotation
 class Merge(BinaryJsonPath):
     def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
         match = ensure(match)
@@ -224,8 +438,8 @@ class Intersect(BinaryJsonPath):
 
 
 class Key(JsonPath):
-    def __init__(self, key: str, *, start=0, end=0):
-        super().__init__(start=start, end=end)
+    def __init__(self, key: str):
+        super().__init__()
         self.key = key
 
     def __repr__(self):
@@ -250,8 +464,8 @@ class Key(JsonPath):
 
 
 class Index(JsonPath):
-    def __init__(self, ix: Union[int, slice], start=0, end=0):
-        super().__init__(start=start, end=end)
+    def __init__(self, ix: Union[int, slice]):
+        super().__init__()
         self.index = ix
 
     def __repr__(self):
@@ -279,17 +493,18 @@ class Index(JsonPath):
                     yield match.push(i, this[i])
 
 
-class Bind(JsonPath):
-    def __init__(self, name: str, child: JsonPath, start=0, end=0):
-        super().__init__(start=start, end=end)
+class Bind(UnaryJsonPath):
+    def __init__(self, child: JsonPath, name: str):
+        super().__init__(child)
         self.name = name
-        self.child = child
 
     def __repr__(self):
-        return f"{type(self).__name__}({self.name})"
+        return f"{type(self).__name__}({self.name!r}, {self.child!r})"
 
     def __eq__(self, other):
-        return type(self) is type(other) and self.name == other.name
+        return (type(self) is type(other) and
+                self.name == other.name and
+                self.child == other.child)
 
     def __hash__(self):
         return hash(type(self)) ^ hash(self.name)
@@ -300,12 +515,18 @@ class Bind(JsonPath):
             yield match.push(found.key, found.value, self.name)
 
 
-class Func(JsonPath):
-    def __init__(self, fn: Callable[[JsonValue], JsonValue],
-                 args: Sequence[JsonPath] = (), start=0, end=0):
-        super().__init__(start=start, end=end)
+class FilterFunction(JsonPath):
+    def __init__(self, fn: Callable[[JsonValue], JsonValue], *args: JsonPath):
+        super().__init__()
         self.fn = fn
         self.args = args
+
+    @classmethod
+    def wraps(cls, fn: Callable[[JsonValue], JsonValue]
+              ) -> Callable[[Sequence[JsonPath]], JsonPath]:
+        def wrap_filter_fn(*args: Sequence[JsonPath]) -> JsonPath:
+            return FilterFunction(fn, *args)
+        return wrap_filter_fn
 
     def __repr__(self):
         return f"{type(self).__name__}({self.fn!r})"
@@ -318,358 +539,392 @@ class Func(JsonPath):
 
     def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
         match = ensure(match)
-        yield match.push(None, self.fn(match.value, *self.args))
+        value = self.fn(match.value)
+        yield match.push(value, value)
 
 
-class Comparison(JsonPath):
-    comparisons: dict[str, Callable[[JsonValue, JsonValue], JsonValue]] = {
-        '!=': operator.ne,
-        '==': operator.eq,
-        '=': operator.eq,
-        '<=': operator.le,
-        '<': operator.lt,
-        '>=': operator.ge,
-        '>': operator.gt,
-        '=~': lambda s, expr: bool(isinstance(s, str) and re.search(expr, s)),
+class Comparison(BinaryJsonPath):
+    # Allow creating an instance with a string instead of a function, to make
+    # it easier to compare in tests
+    string_to_op: dict[str, Callable] = {
+        "!=": operator.ne,
+        "==": operator.eq,
+        "<=": operator.le,
+        "<": operator.lt,
+        ">=": operator.ge,
+        ">": operator.gt,
+        "~=": regex_compare,
     }
 
-    def __init__(self, op_name: str, value: JsonValue, start=0, end=0):
-        super().__init__(start=start, end=end)
-        self.op_name = op_name
-        self.op = self.comparisons[op_name]
-        self.val = value
+    def __init__(self, left: JsonPath, op: Union[str, Callable],
+                 right: JsonPath):
+        super().__init__(left, right)
+        if isinstance(op, str):
+            op = self.string_to_op[op]
+        self.op = op
 
     def __repr__(self):
-        return f"{type(self).__name__}({self.op_name!r}, {self.val!r})"
+        return f"{type(self).__name__}({self.left!r} {self.op} {self.right!r})"
 
     def __hash__(self):
         return hash(type(self)) ^ hash(self.op) ^ hash(self.val)
 
     def __eq__(self, other):
-        return (type(self) is type(other) and self.op == other.op and
-                self.val == other.val)
+        return (type(self) is type(other) and
+                self.left == other.left and
+                self.op == other.op and
+                self.right == other.right)
 
     def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
         match = ensure(match)
-        try:
-            if self.op(match.value, self.val):
-                yield match
-        except TypeError:
-            pass
+        op = self.op
+
+        # Evaluate the right side once to get the value we will compare to
+        for right_m in self.right.find(match):
+            right_v = right_m.value
+            if isinstance(right_v, (int, float, str)):
+                break
+        else:
+            return
+
+        for left_m in self.left.find(match):
+            try:
+                passed = op(left_m.value, right_v)
+            except TypeError:
+                continue
+            if passed:
+                yield left_m
 
 
-def func_maker(fn: Callable[[JsonValue], JsonValue]
-               ) -> Callable[[], Func]:
-    def maker(*args: JsonPath) -> Func:
-        return Func(fn, args)
+class Math(BinaryJsonPath):
+    # Allow creating an instance with a string instead of a function, to make
+    # it easier to compare in tests
+    string_to_op: dict[str, Callable] = {
+        "+": operator.add,
+        "-": operator.sub,
+        "*": operator.mul,
+        "/": operator.truediv,
+    }
 
-    return maker
+    def __init__(self, left: JsonPath, op: Union[str, Callable],
+                 right: JsonPath):
+        super().__init__(left, right)
+        if isinstance(op, str):
+            op = self.string_to_op[op]
+        self.op = op
+
+    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+        match = ensure(match)
+        op = self.op
+
+        # Evaluate the right side once to get the value we will compare to
+        for right_m in self.right.find(match):
+            right_v = right_m.value
+            if isinstance(right_v, (int, float, str)):
+                break
+        else:
+            return
+
+        for left_m in self.left.find(match):
+            left_v = left_m.value
+            if isinstance(left_v, (int, float)):
+                result = op(left_v, right_v)
+                yield match.push(left_v, result)
 
 
-built_in_makers: dict[str, Callable[[], JsonPath]] = {
-    "len": func_maker(len),
-    "sorted": func_maker(sorted),
-    "keys": func_maker(list),
+filter_functions: dict[str, Callable[[], JsonPath]] = {
+    "len": FilterFunction.wraps(len),
+    "sorted": FilterFunction.wraps(sorted),
+    "keys": FilterFunction.wraps(get_keys),
     "parent": Parent,
 }
 
 
-class TKind(enum.Enum):
-    root = enum.auto()
-    this = enum.auto()
-    child = enum.auto()
-    implicit_child = enum.auto()
-    parent = enum.auto()
-    where = enum.auto()
-    choice = enum.auto()
-    every = enum.auto()
-    desc = enum.auto()
-    merge = enum.auto()
-    intersect = enum.auto()
-    key = enum.auto()
-    index = enum.auto()
-    slice = enum.auto()
-    func = enum.auto()
-    compare = enum.auto()
-    open_paren = enum.auto()
-    close_paren = enum.auto()
-    open_square = enum.auto()
-    close_square = enum.auto()
-    bind = enum.auto()
+# Pratt parser based on this extremely helpful and easy-to-read article:
+# https://journal.stuffwithstuff.com/2011/03/19/pratt-parsers-expression-parsing-made-easy/
+#
+# In the class names below "prefix" means "prefix or standalone" and
+# "infix" means "not prefix" (includes postfix and "mixfix" (e.g. ?:))
+
+class Parselet:
+    precedence = Precedence.binary
+
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        raise NotImplementedError
+
+    def parse_infix(self, parser: Parser, left: JsonPath, token: Token
+              ) -> JsonPath:
+        raise NotImplementedError
 
 
-class Token(NamedTuple):
-    kind: TKind
-    strings: tuple[str, ...]
-    source: str
-    start: int
-    end: int
+class GroupParselet(Parselet):
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        expr = parser.expression()
+        parser.consume(Kind.close_paren)
+        return expr
 
 
-token_exprs = {
-    TKind.func: re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*[(]"),
-    TKind.root: re.compile(r"\s*[$]\s*"),
-    TKind.this: re.compile(r"\s*@\s*"),
-    TKind.every: re.compile(r"\s*[*]\s*"),
-    TKind.desc: re.compile(r"\s*[.][.]\s*"),
-    TKind.child: re.compile(r"\s*[.]\s*"),
-    TKind.parent: re.compile(r"\s*\^\s*"),
-    TKind.where: re.compile(r"\s*<-\s*"),
-    TKind.choice: re.compile(r"\s*[|][|]\s*"),
-    TKind.merge: re.compile(r"\s*[|]\s*"),
-    TKind.intersect: re.compile(r"\s*&\s*"),
-    TKind.key: re.compile(r"\s*(\w+)\s*", re.UNICODE),
-    TKind.index: re.compile(r"\s*\[\s*(-?\d+)\s*]\s*"),
-    TKind.slice: re.compile(
-        r"\s*\[(\s*-?\d+\s*)?:(\s*-?\d+\s*)?(:(-?\d+))?]\s*"),
-    TKind.open_paren: re.compile(r"\s*[(]\s*"),
-    TKind.close_paren: re.compile(r"\s*[)]\s*"),
-    TKind.open_square: re.compile(r"\s*\[\s*"),
-    TKind.close_square: re.compile(r"\s*]\s*"),
-}
-ws_expr = re.compile(r"\s+")
-number_expr = re.compile(
-    r"-?((\d+([.]\d*(e\d+)?)?)|([.]\d+([eE]\d*)?))"
-)
-simple_key_expr = re.compile(r"^\s*(\w+)\s*$", re.UNICODE)
-simple_path_expr = re.compile(r"^\s*\w+(\s*[.]\w+\s*)+$", re.UNICODE)
-compare_op_expr = re.compile(r"\s*(==|=|!=|<=|<(?!-)|>=|>)\s*")
-bind_expr = re.compile(r"<([A-Za-z_]+[A-Za-z0-9_]*)>")
+class SingletonParselet(Parselet):
+    def __init__(self, path: JsonPath):
+        self.path = path
+
+    def __repr__(self):
+        return f"<{type(self).__name__} {self.path!r}>"
+
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        return self.path
 
 
-def lex_string(text: str, pos: int) -> tuple[str, int]:
-    if pos >= len(text):
-        raise ParserError("Unexpected end of path string")
-    quote_char = text[pos]
-    if quote_char not in "'\"":
-        raise ParserError(f"Expected string at {pos} found {quote_char!r}")
+class KeyParselet(Parselet):
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        return Key(token.payload)
 
-    start_pos = pos
-    pos += 1
-    prev = pos
-    output: list[str] = []
-    while pos < len(text):
-        char = text[pos]
-        if char == quote_char:
-            if prev < pos:
-                output.append(text[prev:pos])
-            return "".join(output), pos + 1
-        elif text[pos] == "\\" and pos < len(text) - 1:
-            if prev < pos:
-                output.append(text[prev:pos])
-            output.append(text[pos + 1])
-            pos += 2
-            prev = pos
+
+class LiteralParselet(Parselet):
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        if token.kind == Kind.string:
+            return Literal(token.payload)
+        elif token.kind == Kind.number:
+            num_str = token.payload
+            try:
+                number = ast.literal_eval(num_str)
+            except SyntaxError:
+                raise ParserError(f"Can't parse number {num_str}")
+            return Literal(number)
         else:
-            pos += 1
-    raise ParserError(f"Missing end quote at {start_pos}")
+            raise Exception(f"Unknown literal kind {token.kind}")
 
 
-def lex(text: str) -> Iterable[Token]:
-    pos = 0
-    while pos < len(text):
-        start = pos
-        if text[pos] in "'\"":
-            key, pos = lex_string(text, pos)
-            yield Key(key, start=start, end=pos)
-        elif m := bind_expr.match(text, pos):
-            yield Token(TKind.bind, (m.group(1),), m.group(0),
-                        m.start(), m.end())
-            pos = m.end()
-        elif m := compare_op_expr.match(text, pos):
-            op_name = m.group(1)
-            op_end = m.end()
-            if nm := number_expr.match(text, op_end):
-                num_text = nm.group(0)
-                value = float(num_text) if "." in num_text else int(num_text)
-                pos = nm.end()
-            else:
-                value, pos = lex_string(text, op_end)
-            yield Token(TKind.implicit_child, (), "", start, start)
-            yield Comparison(op_name, value, start=start, end=op_end)
-        else:
-            for tk, expr in token_exprs.items():
-                if m := expr.match(text, pos):
-                    pos = m.end()
-                    yield Token(tk, m.groups(), m.group(0), start, pos)
-                    break
-            else:
-                if m := ws_expr.match(text, pos):
-                    pos = m.end()
-                else:
-                    raise ParserError(f"Can't parse {text[pos]!r} at {pos}")
+class IndexParselet(Parselet):
+    # This class can act as both a prefix, for `[foo]`, and as an infix to
+    # support `foo[bar]` without a dot in-between
 
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        return self.parse_numeric_index(parser)
 
-def slice_index(s: Optional[str]) -> Optional[int]:
-    if s is not None:
+    def parse_infix(self, parser: Parser, left: JsonPath, token: Token
+                    ) -> JsonPath:
+        right = self.parse_numeric_index(parser)
+        return Child.make(left, right)
+
+    @staticmethod
+    def to_index(string: str) -> int:
         try:
-            return int(s)
+            return int(string)
         except ValueError:
-            raise ParserError(f"Not a valid numeric index: {s!r}")
+            raise ParserError(f"Can't use {string} as index")
 
+    @staticmethod
+    def parse_numeric_index(parser: Parser) -> JsonPath:
+        # If square brackets contains a number or slice syntax, parse it into
+        # an Index path, otherwise, treat x[y] just like x.(y)
+        if parser.current().kind in (Kind.number, Kind.colon):
+            to_index = IndexParselet.to_index
+            start_str = ""
+            stop_str = ""
+            step_str = ""
+            if parser.current().kind == Kind.number:
+                start_str = parser.consume().payload
+                if parser.take(Kind.close_square):
+                    return Index(to_index(start_str))
 
-def binary_reducer(
-        kind: TKind, fn: Callable[[JsonPath, JsonPath], JsonPath]
-        ) -> Callable[[list[Union[JsonPath, Token]]], Optional[JsonPath]]:
-    def reducer(tokens: list[Union[JsonPath, Token]]) -> Optional[JsonPath]:
-        for i in range(1, len(tokens)):
-            token = tokens[i]
-            if isinstance(token, Token) and token.kind == kind:
-                left = tokens[:i]
-                right = tokens[i + 1:]
-                if not right:
-                    raise ParserError(
-                        f"Expected value after {token} at {token.start}")
-                return fn(reduce(left), reduce(right))
-    return reducer
-
-
-# The ordering in this dict defines the binding priority of the operators, from
-# loosest to tightest
-BinaryOpType = Callable[[JsonPath, JsonPath], JsonPath]
-binary_ops: dict[TKind, BinaryOpType] = {
-    TKind.choice: Choice,
-    TKind.merge: Merge,
-    TKind.intersect: Intersect,
-    TKind.desc: Descendants,
-    TKind.child: Child.make,
-    TKind.implicit_child: Child.make,
-    TKind.where: Where,
-}
-binary_op_order = tuple(binary_ops)
-
-
-def reduce(tokens: list[Union[JsonPath, Token]]) -> JsonPath:
-    assert tokens
-    # Replace atomic tokens with their JsonPath equivalent, and also handle
-    # groupings (round and square brackets)
-    i = 0
-    stack: list[int] = []
-    while i < len(tokens):
-        token = tokens[i]
-        if not isinstance(token, Token):
-            i += 1
-            continue
-        kind = token.kind
-        if kind == TKind.root:
-            tokens[i] = Root(start=token.start, end=token.end)
-        elif kind == TKind.this:
-            tokens[i] = This(start=token.start, end=token.end)
-        elif kind == TKind.parent:
-            tokens[i] = Parent(start=token.start, end=token.end)
-        elif kind == TKind.every:
-            tokens[i] = Every(start=token.start, end=token.end)
-        elif kind == TKind.key:
-            tokens[i] = Key(token.strings[0], start=token.start, end=token.end)
-        elif kind == TKind.index:
-            ix = slice_index(token.strings[0])
-            tokens[i:i + 1] = [
-                Token(TKind.implicit_child, (), "", token.start, token.start),
-                Index(ix, start=token.start, end=token.end)
-            ]
-        elif kind == TKind.slice:
-            start = slice_index(token.strings[0])
-            end = slice_index(token.strings[1])
-            step = slice_index(token.strings[3])
-            tokens[i:i + 1] = [
-                Token(TKind.implicit_child, (), "", token.start, token.start),
-                Index(slice(start, end, step), start=token.start, end=token.end)
-            ]
-            i = i + 2
-            continue
-        elif kind in (TKind.open_paren, TKind.func,
-                      TKind.open_square):
-            stack.append(i)
-        elif kind == TKind.close_square:
-            open_index = stack.pop()
-            open_square = tokens[open_index]
-            if open_square.kind != TKind.open_square:
-                raise ParserError(f"Unbalanced paren {token} at {token.start}")
-            body = tokens[open_index + 1:i]
-            if not body:
-                del tokens[open_index:i + 1]
-                i = open_index
-                continue
-            tokens[open_index:i + 1] = [
-                Token(TKind.implicit_child, (), "", token.start, token.start),
-                reduce(body)
-            ]
-            i = open_index + 2
-            continue
-        elif kind == TKind.close_paren:
-            if not stack:
-                raise ParserError(f"Unbalenced close paren at {token.start}")
-            open_index = stack.pop()
-            open_paren = tokens[open_index]
-            if open_paren.kind not in (TKind.func, TKind.open_paren):
-                raise ParserError(f"Unbalanced paren {token} at {token.start}")
-            is_func = open_paren.kind == TKind.func
-            body = tokens[open_index + 1:i]
-            if not body and not is_func:
-                del tokens[open_index:i + 1]
-                i = open_index
-                continue
-
-            repl = [reduce(body)] if body else []
-            if is_func:
-                maker = built_in_makers[open_paren.strings[0]]
-                repl = [maker(*repl)]
-            tokens[open_index:i + 1] = repl
-            i = open_index + 1
-            continue
-        elif kind == TKind.bind:
-            if i == 0 or not tokens:
-                raise ParserError(
-                    f"Binding must follow an expression at {token.start}"
-                )
-            name = token.strings[0]
-            previous = tokens[i - 1]
-            assert isinstance(previous, JsonPath)
-            tokens[i - 1:i + 1] = [Bind(name, previous)]
-            continue
-
-        i += 1
-
-    if not tokens:
-        raise ParserError("String reduced to an empty path")
-    tk0 = tokens[0]
-    if isinstance(tokens[0], Token) and tk0.kind == TKind.implicit_child:
-        del tokens[0]
-
-    # Find the loosest binary operator in this token list, recursively reduce
-    # the sub-lists on either side, then combine them with the op
-    bin_op: Optional[tuple[int, int]] = None  # op_index, op_priority
-    for i, token in enumerate(tokens):
-        if isinstance(token, Token) and token.kind in binary_ops:
-            pri = binary_op_order.index(token.kind)
-            if bin_op is None or pri < bin_op[1]:
-                bin_op = i, pri
-    if bin_op:
-        op_index = bin_op[0]
-        op_token = tokens[op_index]
-        operator = binary_ops[op_token.kind]
-        left = tokens[:op_index]
-        if not left:
-            raise ParserError(
-                f"Left side of {op_token} is empty at {op_token.start}")
-        right = tokens[op_index + 1:]
-        if not right:
-            raise ParserError(
-                f"Right side of {op_token} is empty at {op_token.start}")
-        return operator(reduce(left), reduce(right))
-
-    if not tokens:
-        raise ParserError("String reduced to an empty path")
-
-    if len(tokens) == 1:
-        tk0 = tokens[0]
-        if isinstance(tk0, JsonPath):
-            return tk0
+            if parser.take(Kind.colon):
+                if parser.current().kind == Kind.number:
+                    stop_str = parser.consume().payload
+                if parser.take(Kind.colon):
+                    if parser.current().kind == Kind.number:
+                        step_str = parser.consume().payload
+            parser.consume(Kind.close_square)
+            start = to_index(start_str) if start_str else None
+            stop = to_index(stop_str) if stop_str else None
+            step = to_index(step_str) if step_str else None
+            return Index(slice(start, stop, step))
         else:
-            raise ParserError(f"Parser error: {tk0} at {tk0.start}")
-    else:
-        tk1 = tokens[1]
-        raise ParserError(f"Expected operator at {tk1.start} found {tk1}")
+            expr = parser.expression()
+            parser.consume(Kind.close_square)
+            return expr
+
+
+class BindParselet(Parselet):
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        name: str = token.payload
+        child = parser.expression(Precedence.bind)
+        return Bind(child, name)
+
+
+class CombiningParselet(Parselet):
+    def __init__(self, path_maker: Callable[[JsonPath, JsonPath], JsonPath],
+                 prcendence=Precedence.binary, right_assoc=False):
+        self.path_maker = path_maker
+        self.precedence = prcendence
+        self.right_assoc = right_assoc
+
+    def __repr__(self):
+        return f"<{type(self).__name__} {self.path_maker}, {self.precedence}>"
+
+    def parse_infix(self, parser: Parser, left: JsonPath, token: Token
+                    ) -> JsonPath:
+        prec_adjust = -1 if self.right_assoc else 0
+        right = parser.expression(self.precedence + prec_adjust)
+        return self.path_maker(left, right)
+
+
+class AbstractOperatorParselet(Parselet):
+    def __init__(self, op: Union[str, Callable], precedence=Precedence.binary,
+                 right_assoc=False):
+        self.op = op
+        self.precedence = precedence
+        self.right_assoc = right_assoc
+
+
+class ComparisonParselet(AbstractOperatorParselet):
+    def parse_infix(self, parser: Parser, left: JsonPath, token: Token
+                    ) -> JsonPath:
+        prec_adjust = -1 if self.right_assoc else 0
+        # Hack: we want to be able to compare to a string, but normally "foo"
+        # would parse to Key("foo"), so we special case it
+        if parser.current().kind == Kind.string:
+            right = Literal(parser.consume().payload)
+        else:
+            right = parser.expression(self.precedence + prec_adjust)
+        return Comparison(left, self.op, right)
+
+
+class MathParselet(AbstractOperatorParselet):
+    def parse_infix(self, parser: Parser, left: JsonPath, token: Token
+                    ) -> JsonPath:
+        prec_adjust = -1 if self.right_assoc else 0
+        right = parser.expression(self.precedence + prec_adjust)
+        return Math(left, self.op, right)
+
+
+class CallParselet(Parselet):
+    precedence = Precedence.call
+
+    def parse_infix(self, parser: Parser, left: JsonPath, token: Token
+              ) -> JsonPath:
+        if not isinstance(left, Key):
+            raise ParserError(f"Unexpected left bracket at {token.pos}")
+        fn_name = left.key
+
+        args: list[JsonPath] = []
+        if not parser.take(Kind.close_paren):
+            # Parse comma-separated arguments until we hit close paren
+            while True:
+                args.append(parser.expression())
+                if parser.take(Kind.comma):
+                    continue
+                else:
+                    break
+            parser.consume(Kind.close_paren)
+
+        try:
+            maker_fn = filter_functions[fn_name]
+        except KeyError:
+            raise ParserError(f"No function named {fn_name}")
+        return maker_fn(*args)
+
+
+prefixes: dict[Kind, Parselet] = {
+    Kind.number: LiteralParselet(),
+    Kind.name: KeyParselet(),
+    Kind.string: KeyParselet(),
+    Kind.root: SingletonParselet(Root()),
+    Kind.this: SingletonParselet(This()),
+    Kind.star: SingletonParselet(Every()),
+    Kind.bind: BindParselet(),
+    Kind.open_paren: GroupParselet(),
+    Kind.open_square: IndexParselet(),
+}
+infixes: dict[Kind, Parselet] = {
+    Kind.child: CombiningParselet(Child.make, Precedence.child),
+    Kind.where: CombiningParselet(Where, Precedence.where),
+    Kind.desc: CombiningParselet(Descendants, Precedence.binary),
+    Kind.merge: CombiningParselet(Merge, Precedence.merge),
+    Kind.or_: CombiningParselet(Or, Precedence.or_),
+    Kind.intersect: CombiningParselet(Intersect, Precedence.intersect),
+    Kind.less_than_eq: ComparisonParselet(operator.le),
+    Kind.less_than: ComparisonParselet(operator.lt),
+    Kind.equals: ComparisonParselet(operator.eq),
+    Kind.greater_than_eq: ComparisonParselet(operator.ge),
+    Kind.greater_than: ComparisonParselet(operator.gt),
+    Kind.not_eq: ComparisonParselet(operator.ne),
+    Kind.plus: MathParselet(operator.add, Precedence.sum),
+    Kind.minus: MathParselet(operator.sub, Precedence.sum),
+    Kind.star: MathParselet(operator.mul, Precedence.product),
+    Kind.divide: MathParselet(operator.truediv, Precedence.product),
+    Kind.open_paren: CallParselet(),
+    Kind.open_square: IndexParselet(),
+}
+
+
+class Parser:
+    def __init__(self, tokens: Sequence[Token]):
+        self.tokens = list(tokens)
+        # self.depth = 0
+
+    def take(self, kind: Kind) -> Optional[Token]:
+        if not self.tokens:
+            return None
+        if self.tokens[0].kind == kind:
+            return self.consume()
+
+    def consume(self, kind: Kind = None) -> Token:
+        if self.tokens:
+            token = self.tokens.pop(0)
+        else:
+            token = Token(Kind.eof, "<EOF>", -1)
+
+        if kind and token.kind != kind:
+            raise ParserError(f"Expected {kind}, "
+                              f"found {token.kind} ({token.payload}) "
+                              f"at {token.pos}")
+        return token
+
+    def current(self) -> Token:
+        return self.lookahead(0)
+
+    def lookahead(self, distance: int) -> Optional[Token]:
+        if distance >= len(self.tokens):
+            return Token(Kind.eof, "<EOF>", -1)
+        return self.tokens[distance]
+
+    def current_infix(self) -> Optional[Parselet]:
+        return infixes.get(self.current().kind)
+
+    def infix_precedence(self) -> int:
+        infix = infixes.get(self.current().kind)
+        if infix:
+            return infix.precedence
+        return 0
+
+    def expression(self, precedence=0) -> JsonPath:
+        token = self.consume()
+        prefix_parselet = prefixes.get(token.kind)
+        if not prefix_parselet:
+            raise ParserError(f"Syntax error {token.payload} at {token.pos}")
+
+        # self.depth += 1
+        expr = prefix_parselet.parse_prefix(self, token)
+        # self.depth -= 1
+
+        while precedence < self.infix_precedence():
+            token = self.consume()
+            infix_parselet = infixes[token.kind]
+            # self.depth += 1
+            expr = infix_parselet.parse_infix(self, expr, token)
+            # self.depth -= 1
+
+        return expr
+
+    @classmethod
+    def parse(cls, text: str) -> JsonPath:
+        parser = cls(lex(text))
+        path = parser.expression()
+        if parser.tokens:
+            tk = parser.tokens[0]
+            raise ParserError(f"Syntax error: {tk.payload} at {tk.pos}")
+        return path
 
 
 def _fast_keypath(p: str) -> JsonPath:
@@ -680,13 +935,14 @@ def _fast_keypath(p: str) -> JsonPath:
     return jp
 
 
+simple_key_expr = re.compile(r"^\s*(\w+)\s*$", re.UNICODE)
+simple_path_expr = re.compile(r"^\s*\w+(\s*[.]\w+\s*)+$", re.UNICODE)
+
+
 def parse(text: str) -> JsonPath:
     if simple_key_expr.match(text):
         return Key(text.strip())
     if simple_path_expr.match(text):
         return _fast_keypath(text)
+    return Parser.parse(text)
 
-    tokens = list(lex(text))
-    if not tokens:
-        raise ParserError("Parse error: no tokens")
-    return reduce(tokens)
