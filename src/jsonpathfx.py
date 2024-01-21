@@ -567,7 +567,8 @@ class Comparison(BinaryJsonPath):
         return f"{type(self).__name__}({self.left!r} {self.op} {self.right!r})"
 
     def __hash__(self):
-        return hash(type(self)) ^ hash(self.op) ^ hash(self.val)
+        return (hash(type(self)) ^ hash(self.left) ^ hash(self.op) ^
+                hash(self.right))
 
     def __eq__(self, other):
         return (type(self) is type(other) and
