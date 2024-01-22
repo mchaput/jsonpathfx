@@ -731,7 +731,7 @@ class Parselet:
         raise NotImplementedError
 
     def parse_infix(self, parser: Parser, left: JsonPath, token: Token
-              ) -> JsonPath:
+                    ) -> JsonPath:
         raise NotImplementedError
 
     def precedence(self) -> int:

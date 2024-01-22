@@ -258,6 +258,7 @@ def test_parse_math():
     assert parse("foo + 5") == Math(Key("foo"), "+", Literal(5))
     assert parse("foo - bar") == Math(Key("foo"), "-", Key("bar"))
     assert parse("6.5 * bar") == Math(Literal(6.5), "-", Key("bar"))
+    assert parse("6.5 / bar") == Math(Literal(6.5), "/", Key("bar"))
 
 
 def test_math():
