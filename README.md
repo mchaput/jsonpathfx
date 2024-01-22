@@ -7,10 +7,9 @@ This is a pure Python 3.x implementation of a JSON path language
 (there is no real standard syntax for JSON path, so this implements one
 among many, but I think the syntax is nice).
 
-It uses a hand-written parser which isn't the cleanest code, but it's
-fast compared to some pure-Python jsonpath libraries out there (the
-parser is literally thousands of times faster than `jsonpath_ng` for
-common inputs).
+It uses a proper, extensivle parser, and it's fast compared to some pure-Python
+jsonpath libraries out there (the parser is literally thousands of times faster
+than `jsonpath_ng` for common inputs).
 
 ## API
 
@@ -54,10 +53,12 @@ list is empty.
 | ``path1 \| path2`` | Finds any items that match `path1` and also any items that match `path2` (union).                                                                             |
 | `path1 & path2`    | Finds any items that match *both* `path1` and `path2` (intersection).                                                                                         |
 | `path1 \|\| path2` | If any items match `path1`, this expression returns those items. Otherwise, it returns any items that match `path2` (or).                                     |
-| `path1 <- path2`   | Finds any items that match `path1` that have children that match `path2` (contains).                                                                          |
+| `path1 ! path2`    | Matches results from `path1` if they don't match `path2`                                                                                                      |
+| `{path}`           | Matches if the current item has children that match `path` (contains).                                                                                        |
 | `path1.parent()`   | Finds the parents of any items that match `path1`                                                                                                             |
 | `path1.len()`      | Finds the lengths of items that match `path1`.                                                                                                                |
 | `path1.keys()`     | For dicts that match `path1`, this returns the keys.                                                                                                          |
+| `path1.items()`    | For dicts that match `path1`, returns an array of `["key", value]` arrays for the items.                                                                      |
 | `path1 > 5`        | Finds matches of `path1` that return true for the given comparison. You can use `==`, `=`, `!=`, `<`, `<=`, `>`, or `>=`.                                     |  
 | `type == "car"`    | Compares the matchs to a string. With strings you can use an additional operator `=~` which treats the right-hand string as a regular expression.             |
 | `path1 + path2`    | Yields the results of applying an operator (`+`, `-`, `*`, or `/`) between all the matches from `path1` and the first match in `path2`. Only matches numbers. |
@@ -66,11 +67,11 @@ list is empty.
 ## Grouping
 
 * Operators have the following relative binding strength, from *loosest* to *tightest* binding:
-  * `<-` (contains)
-  * Comparisons
+  * `()` `{}` (group, contains)
   * `&` (intersect)
   * `|` (union)
   * `||` (or)
+  * `==` `!=` `<` `<=` `>` `>=` (comparisons)
   * `+` `-`
   * `*` `/`
   * `.` (child)

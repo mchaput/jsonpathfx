@@ -79,12 +79,12 @@ def test_parse_this():
 
 
 def test_parse_where():
-    assert parse("foo <- bar") == Where(Key("foo"), Key("bar"))
+    assert parse("foo{bar}") == Child(Key("foo"), Where(Key("bar")))
 
 
 def test_parse_where_multi():
-    p = parse("foo <- bar <- baz")
-    assert p == Where(Where(Key("foo"), Key("bar")), Key("baz"))
+    p = parse("foo{bar{baz}}")
+    assert p == Child(Key("foo"), Where(Child(Key("bar"), Where(Key("baz")))))
 
 
 def test_parse_every():
@@ -113,7 +113,7 @@ def test_parse_choice_and_merge():
     assert p == Merge(Key("foo"), Or(Key("bar"), Key("baz")))
 
 
-def test_intersect():
+def test_parse_intersect():
     assert parse("foo & bar") == Intersect(Key("foo"), Key("bar"))
 
 
@@ -161,8 +161,8 @@ def test_parse_paren_mismatch():
         parse("a.b)")
 
 
-def test_parse_len():
-    assert parse("foo.len()") == Child(Key("foo"), FilterFunction(len))
+def test_parse_call():
+    assert parse("foo.len()") == Child(Key("foo"), TransformFunction(len))
 
 
 def test_parse_path_maker():
@@ -174,29 +174,15 @@ def test_parse_compare():
     assert parse("foo == 2") == Comparison(Key("foo"), "==", Literal(2))
     assert parse("foo ==  -3.4") == Comparison(Key("foo"), "==", Literal(-3.4))
 
-    p = parse("* <- (type == 'car')")
-    assert p == Where(Every(), Comparison(Key("type"), "==", Literal("car")))
+    p = parse("{type == 'car'}")
+    assert p == Where(Comparison(Key("type"), "==", Literal("car")))
 
-    p = parse("* <- (type == 'car').color")
-    assert p == Where(
-        Every(),
-        Child(
-            Comparison(Key("type"), "==", Literal("car")),
-            Key("color")
-        )
-    )
-
-    p = parse("* <- look .color == 10")
-    assert p == Where(
-        Every(),
-        Comparison(
-            Child(
-                Key("look"),
-                Key("color")
-            ),
-            "==",
-            Literal(10)
-        )
+    p = parse("{type == 'car'}.color")
+    assert p == Child(
+        Where(
+            Comparison(Key("type"), "==", Literal("car"))
+        ),
+        Key("color")
     )
 
 
@@ -231,17 +217,82 @@ def test_parse_bind():
     )
 
 
+def test_items():
+    domain = {
+        "detail": ["d1", "d2"],
+        "prim": ["pr1"],
+        "point": ["p1", "p2"],
+        "vertex": ["v1", "v2"]
+    }
+    assert parse("items()").values(domain) == [
+        ["detail", ["d1", "d2"]],
+        ["prim", ["pr1"]],
+        ["point", ["p1", "p2"]],
+        ["vertex", ["v1", "v2"]]
+    ]
+
+
+def test_discard():
+    domain = [1, 2, 3, 4, 5]
+    assert parse("*").values(domain) == domain
+    assert parse("* ! {@ == 2}").values(domain) == [1, 3, 4, 5]
+
+
+def test_discard2():
+    domain = {
+        "detail": ["d1", "d2"],
+        "prim": ["pr1"],
+        "point": ["p1", "p2"],
+        "vertex": ["v1", "v2"]
+    }
+    p = parse("items(){[0] == 'point'}")
+    assert p.values(domain) == [["point", ["p1", "p2"]]]
+
+    p = parse("items() ! ([0] == 'point')")
+    assert p.values(domain) == [["detail", ["d1", "d2"]],
+                                ["prim", ["pr1"]],
+                                ["vertex", ["v1", "v2"]]]
+
+
 def test_parse_math():
     assert parse("foo + 5") == Math(Key("foo"), "+", Literal(5))
     assert parse("foo - bar") == Math(Key("foo"), "-", Key("bar"))
     assert parse("6.5 * bar") == Math(Literal(6.5), "-", Key("bar"))
 
 
+def test_math():
+    domain = {
+        "foo": 5,
+        "bar": 10,
+        "baz": 40,
+    }
+    assert parse("foo + 2").values(domain) == [7]
+    assert parse("bar * 3").values(domain) == [30]
+    assert parse("baz - 2").values(domain) == [38]
+    assert parse("bar / 2").values(domain) == [20]
+    assert parse("foo + bar").values(domain) == [15]
+    assert parse("foo + bar * baz").values(domain) == [405]
+    assert parse("foo * bar + baz").values(domain) == [405]
+
+
 def test_parse_math_every():
     assert parse("* * *") == Math(Every(), "*", Every())
 
 
-def test_find_key():
+def test_parse_precedence():
+    p = parse("x == 10 & y == 20")
+    assert p == Intersect(
+        Comparison(Key("x"), "==", Literal(10)),
+        Comparison(Key("y"), "==", Literal(20))
+    )
+
+
+def test_this():
+    assert parse("@").values([1, 2, 3]) == [[1, 2, 3]]
+    assert parse("@").values(2) == [2]
+
+
+def test_key():
     domain = {
         "foo": 10,
         "bar": 20,
@@ -255,7 +306,7 @@ def test_find_key():
     assert parse("bazz").values(domain) == []
 
 
-def test_find_index():
+def test_index():
     domain = {
         "foo": [5, 7, 10],
     }
@@ -265,7 +316,7 @@ def test_find_index():
     assert parse("bar[3]").values(domain) == []
 
 
-def test_find_slice():
+def test_slice():
     domain = {
         "foo": [5, 10, 15, 20, 25, 30],
     }
@@ -274,7 +325,7 @@ def test_find_slice():
     assert parse("foo[::2]").values(domain) == [5, 15, 25]
 
 
-def test_find_fn():
+def test_fn():
     domain = {
         "foo": ["c", "t", "e", "p", "b"],
     }
@@ -283,7 +334,7 @@ def test_find_fn():
     assert parse("foo.sorted()").values(domain) == [["b", "c", "e", "p", "t"]]
 
 
-def test_find_parent():
+def test_parent():
     domain = {
         "foo": {
             "bar": 20,
@@ -306,16 +357,31 @@ def test_root_parent():
     assert parse("$.parent()").values(domain) == []
 
 
-def test_find_where_sibling():
+def test_where():
+    domain = [
+        {"name": "foo", "kind": "car"},
+        {"name": "bar", "kind": "boat"},
+        {"name": "baz", "kind": "car"},
+        {"name": "quux", "kind": "boat"},
+    ]
+    p = parse("*{kind == 'boat'}.name")
+    assert p.values(domain) == ["bar", "quux"]
+
+
+def test_where_sibling():
     domain = [
         {"name": "foo", "size": 3},
         {"name": "bar"},
         {"name": "baz", "size": 6},
     ]
-    assert parse("(* <- size).name").values(domain) == ["foo", "baz"]
+    assert parse("*{size}.name").values(domain) == ["foo", "baz"]
 
 
-def test_find_every():
+def test_where_literal():
+    assert parse("@ == 2").values(2) == [2]
+
+
+def test_every():
     domain = {
         "books": {
             "foo": {"a": 10, "b": 20},
@@ -326,7 +392,7 @@ def test_find_every():
     assert parse("$.books[*].b").values(domain) == [20, 40, 60]
 
 
-def test_find_descendents():
+def test_descendents():
     domain = {
         "alfa": {
             "bravo": "a",
@@ -350,7 +416,7 @@ def test_find_descendents():
     assert parse("$..mike").values(domain) == ["j", "i"]
 
 
-def test_find_merge():
+def test_merge():
     domain = {
         "geo": {
             "detail": [
@@ -371,22 +437,44 @@ def test_find_merge():
     assert p.values(domain) == ["a", "b", "c", "d", "e", "f"]
 
 
-def test_find_compare():
+def test_intersect():
+    domain = {
+        "foo": [1,2,3,4],
+        "bar": [2,3,4,5],
+        "baz": [3,4,5,6]
+    }
+    assert parse("foo.* & bar.*").values(domain) == [2, 3, 4]
+    assert parse("foo.* & bar.* & baz.*").values(domain) == [3, 4]
+    assert parse("bar.* & baz.*").values(domain) == [3, 4, 5]
+
+
+def test_intersect_comparison():
+    domain = [
+        {"name": "alfa", "kind": "prim", "x": 10},
+        {"name": "bravo", "kind": "prim", "x": 20},
+        {"name": "charlie", "kind": "point", "x": 10},
+        {"name": "delta", "kind": "point", "x": 20},
+    ]
+    assert parse("*{kind == 'prim'}.name").values(domain) == ["alfa", "bravo"]
+    assert parse("*{x == 20}.name").values(domain) == ["bravo", "delta"]
+    p = parse("*.({kind == 'prim'} & {x == 20}).name")
+    assert p.values(domain) == ["bravo"]
+
+
+def test_compare():
     domain = {
         "foo": {"size": 10},
         "bar": {"size": 20},
         "baz": {"size": 30},
     }
-    assert parse("$.*.size > 15").values(domain) == [20, 30]
+    assert parse("*.size > 15").values(domain) == [20, 30]
 
-
-def test_find_compare2():
     domain = {
         "foo": {"type": "car", "color": "red"},
         "bar": {"type": "boat", "color": "blue"},
         "baz": {"type": "car", "color": "green"},
     }
-    p = parse("(* <- (type == 'car')).color")
+    p = parse("*{type == 'car'}.color")
     assert p.values(domain) == ["red", "green"]
 
 
@@ -395,7 +483,10 @@ def test_compare_to_path():
         "foo": [1, 2, 3, 4, 5, 6, 7],
         "cutoff": 4
     }
+    assert parse("foo").values(domain) == [[1, 2, 3, 4, 5, 6, 7]]
+    assert parse("foo.*").values(domain) == [1, 2, 3, 4, 5, 6, 7]
     p = parse("foo.* < cutoff")
+    assert p == Comparison(Child(Key('foo'), Every()), "<", Key('cutoff'))
     assert p.values(domain) == [1, 2, 3]
 
 
@@ -404,7 +495,7 @@ def test_compare_type_mismatch():
         "foo": [1, 2, 3, 4, 5, 6, 7],
         "cutoff": "x"
     }
-    p = parse("foo.* < cutoff")
+    p = parse("(foo.*) < cutoff")
     assert p.values(domain) == []
 
 
@@ -504,7 +595,7 @@ def test_merge_binding():
     assert comps == ["detail", "detail", "detail", "point", "vertex", "vertex"]
 
 
-def test_find_math():
+def test_math():
     domain = {
         "foo": [1, 2, 3, 4, 5],
         "bar": 10
