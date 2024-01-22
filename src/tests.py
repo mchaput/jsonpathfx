@@ -269,10 +269,18 @@ def test_math():
     assert parse("foo + 2").values(domain) == [7]
     assert parse("bar * 3").values(domain) == [30]
     assert parse("baz - 2").values(domain) == [38]
-    assert parse("bar / 2").values(domain) == [20]
+    assert parse("bar / 2").values(domain) == [5.0]
     assert parse("foo + bar").values(domain) == [15]
+    # Order of operations
     assert parse("foo + bar * baz").values(domain) == [405]
-    assert parse("foo * bar + baz").values(domain) == [405]
+    assert parse("bar * baz + foo").values(domain) == [405]
+
+    domain = {
+        "foo": [1, 2, 3, 4, 5],
+        "bar": 10
+    }
+    p = parse("foo.* * bar")
+    assert p.values(domain) == [10, 20, 30, 40, 50]
 
 
 def test_parse_math_every():
@@ -593,12 +601,3 @@ def test_merge_binding():
     p = parse("geo.comp:(detail|point|vertex).*.name")
     comps = [m.bindings()["comp"] for m in p.find(domain)]
     assert comps == ["detail", "detail", "detail", "point", "vertex", "vertex"]
-
-
-def test_math():
-    domain = {
-        "foo": [1, 2, 3, 4, 5],
-        "bar": 10
-    }
-    p = parse("foo.* * bar")
-    assert p.values(domain) == [10, 20, 30, 40, 50]
