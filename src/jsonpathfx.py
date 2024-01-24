@@ -24,11 +24,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import annotations
-
 import ast
 import enum
 import operator
 import re
+import sys
 from typing import (Any, Callable, Iterable, NamedTuple, Optional, Pattern,
                     Sequence, Union)
 
@@ -58,6 +58,7 @@ class Kind(enum.Enum):
     desc = enum.auto()  # ..
     star = enum.auto()  # *
     merge = enum.auto()  # |
+    and_ = enum.auto()  # &&
     or_ = enum.auto()  # ||
     intersect = enum.auto()  # &
     bang = enum.auto()  # !
@@ -90,7 +91,7 @@ class Precedence(enum.IntEnum):
     binary = 20
     intersect = 21
     merge = 22
-    or_ = 23
+    logic = 23
     comparison = 30
     sum = 40
     product = 41
@@ -181,6 +182,7 @@ token_exprs: dict[Kind, Union[str, Pattern, LexerFn]] = {
     Kind.child: ".",
     Kind.star: "*",
     Kind.or_: "||",
+    Kind.and_: "&&",
     Kind.merge: "|",
     Kind.intersect: "&",
     Kind.open_paren: "(",
@@ -248,6 +250,8 @@ class Match(NamedTuple):
     key: str | int | None
     parents: tuple[Match, ...]
     name: Optional[str] = None
+    debug: bool = False
+    debug_indent: int = 0
 
     @property
     def root(self) -> Match:
@@ -256,13 +260,14 @@ class Match(NamedTuple):
         else:
             return self
 
-    def push(self, key: str | int | None, value: JsonValue, name: str = None
-             ) -> Match:
+    def push_parent(self, key: str | int | None,
+                    value: JsonValue, name: str = None) -> Match:
         if not isinstance(key, (int, float, str)) and key is not None:
             raise TypeError(f"Can't use {type(key)} as key")
         if not isinstance(value, (int, float, str, dict, list, tuple)):
             raise TypeError(f"Can't use {type(value)} as value")
-        return Match(value, key, self.parents + (self,), name)
+        return Match(value, key, self.parents + (self,), name, self.debug,
+                     self.debug_indent + 1)
 
     def path(self) -> Sequence[str | int | None]:
         return tuple(p.key for p in self.parents[1:]) + (self.key,)
@@ -276,27 +281,39 @@ class Match(NamedTuple):
             bindings[self.name] = self.key
         return bindings
 
+    def plus_level(self) -> Match:
+        if self.debug:
+            return Match(self.value, self.key, self.parents, self.name,
+                         self.debug, self.debug_indent + 1)
+        else:
+            return self
 
-def ensure(value: Union[JsonValue, Match]) -> Match:
-    if isinstance(value, Match):
-        return value
-    else:
-        return Match(value, None, ())
 
-
-def every_child(match: Match) -> Iterable[Match]:
+def every_child(obj: JsonPath, match: Match) -> Iterable[Match]:
     v = match.value
     if isinstance(v, dict):
         for key, value in v.items():
-            yield match.push(key, value)
+            if match.debug:
+                debug_msg(obj, match, f"found dict item {key!r}")
+            yield match.push_parent(key, value)
     else:
         try:
             iterator = iter(v)
         except TypeError:
-            return
+            if match.debug:
+                debug_msg(obj, match, "Can't interate on {v!r}")
         else:
             for i, subval in enumerate(iterator):
-                yield match.push(i, subval)
+                if match.debug:
+                    debug_msg(obj, match, f"Found list item {subval!r}")
+                yield match.push_parent(i, subval)
+
+
+def debug_msg(obj: JsonPath, match: Match, msg: str) -> None:
+    print("  " * match.debug_indent, end="", file=sys.stderr)
+    print(f"{type(obj).__name__}:", msg, file=sys.stderr)
+    sys.stderr.flush()
+
 
 class JsonPath:
     def __init__(self):
@@ -313,14 +330,22 @@ class JsonPath:
         # Good enough for "singletons"; classes with parameters should override
         return hash(type(self))
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
+    def find(self, match: Union[JsonValue, Match], debug=False
+             ) -> Iterable[Match]:
+        if isinstance(match, Match):
+            match = match.plus_level()
+        else:
+            match = Match(match, None, (), None, debug)
+        return self._find(match)
+
+    def _find(self, match: Match) -> Iterable[Match]:
         raise NotImplementedError
 
-    def values(self, data: JsonValue) -> Sequence[JsonValue]:
-        return list(self.itervalues(data))
+    def values(self, data: JsonValue, debug=False) -> Sequence[JsonValue]:
+        return list(self.itervalues(data, debug=debug))
 
-    def itervalues(self, data: JsonValue) -> Iterable[JsonValue]:
-        return (match.value for match in self.find(data))
+    def itervalues(self, data: JsonValue, debug=False) -> Iterable[JsonValue]:
+        return (match.value for match in self.find(data, debug=debug))
 
     def pos(self) -> int:
         return self._pos
@@ -378,20 +403,27 @@ class UnaryJsonPath(JsonPath):
 
 
 class Root(JsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        yield ensure(match).root
+    def _find(self, match: Match) -> Iterable[Match]:
+        if match.debug:
+            debug_msg(self, match, "found root node")
+        yield match.root
 
 
 class This(JsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
-        yield match.push(None, match.value)
+    def _find(self, match: Match) -> Iterable[Match]:
+        if match.debug:
+            debug_msg(self, match, "found: {match.value")
+        yield match.push_parent(None, match.value)
 
 
 class Parent(JsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        if ensure(match).parents:
+    def _find(self, match: Match) -> Iterable[Match]:
+        if match.parents:
+            if match.debug:
+                debug_msg(self, match, "found: {match.parents[-1]")
             yield match.parents[-1]
+        elif match.debug:
+            debug_msg(self, match, "!no parent")
 
 
 class Literal(JsonPath):
@@ -408,14 +440,15 @@ class Literal(JsonPath):
     def __repr__(self):
         return f"{type(self).__name__}({self.literal!r})"
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        yield match.push(self.literal, self.literal)
+    def _find(self, match: Match) -> Iterable[Match]:
+        if match.debug:
+            debug_msg(self, match, f"found literal {self.literal}")
+        yield match.push_parent(self.literal, self.literal)
 
 
 class Every(JsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
-        return every_child(match)
+    def _find(self, match: Match) -> Iterable[Match]:
+        return every_child(self, match)
 
 
 class Child(BinaryJsonPath):
@@ -430,15 +463,16 @@ class Child(BinaryJsonPath):
         else:
             return Child(left, right)
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        for subm in self.left.find(ensure(match)):
-            yield from self.right.find(subm)
+    def _find(self, match: Match) -> Iterable[Match]:
+        for left_m in self.left.find(match):
+            for right_m in self.right.find(left_m):
+                if match.debug:
+                    debug_msg(self, match, f"found {right_m.value!r}")
+                yield right_m
 
 
 class Descendants(BinaryJsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
-
+    def _find(self, match: Match) -> Iterable[Match]:
         def match_recursively(this: Match) -> Iterable[Match]:
             for m in self.right.find(this):
                 yield m
@@ -446,58 +480,86 @@ class Descendants(BinaryJsonPath):
             val = this.value
             if isinstance(val, dict):
                 for key, subval in val.items():
-                    yield from match_recursively(this.push(key, subval))
+                    yield from match_recursively(this.push_parent(key, subval))
             elif isinstance(val, (list, tuple)):
                 for i, subval in enumerate(val):
-                    yield from match_recursively(this.push(i, subval))
+                    yield from match_recursively(this.push_parent(i, subval))
 
         for left_match in self.left.find(match):
             yield from match_recursively(left_match)
 
 
 class Or(BinaryJsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         left_matched = False
-        for match in self.left.find(match):
-            yield match
+        for left_m in self.left.find(match):
+            if match.debug and not left_matched:
+                debug_msg(self, match, f"left side matched")
             left_matched = True
+            yield left_m
         if not left_matched:
+            if match.debug:
+                debug_msg(self, match, "!no match on left")
             yield from self.right.find(match)
+
+
+class And(BinaryJsonPath):
+    def _find(self, match: Match) -> Iterable[Match]:
+        left_matched = False
+        for left_m in self.left.find(match):
+            if match.debug:
+                debug_msg(self, match, f"left matched: {left_m.value}")
+            for right_m in self.right.find(match):
+                if match.debug:
+                    debug_msg(self, match, f"right matched: {right_m.value}")
+                yield right_m
+                break
 
 
 # Can't call this Union, that's a type annotation
 class Merge(BinaryJsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         seen: set[int] = set()
         for subm in self.left.find(match):
+            if match.debug:
+                debug_msg(self, match, f"left found {subm.value!r}")
             yield subm
             seen.add(id(subm.value))
         for subm in self.right.find(match):
             if id(subm.value) not in seen:
+                if match.debug:
+                    debug_msg(self, match, f"right found {subm.value!r}")
                 yield subm
 
 
 class Intersect(BinaryJsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
-        seen = set(hashable(d.value)
-                   for d in self.left.find(match))
+    def _find(self, match: Match) -> Iterable[Match]:
+        seen: set[Union[int, float, str]] = set()
+        for left_m in self.left.find(match):
+            seen.add(hashable(left_m.value))
+            if match.debug:
+                debug_msg(self, match, f"left: {left_m.value!r}")
         for right_m in self.right.find(match):
             if hashable(right_m.value) in seen:
+                if match.debug:
+                    debug_msg(self, match, f"found {right_m.value!r}")
                 yield right_m
+            elif match.debug:
+                debug_msg(self, match, f"!no match {right_m.value}")
 
 
 class Discard(BinaryJsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         for left_m in self.left.find(match):
             passed = True
             for right_m in self.right.find(left_m):
+                if match.debug:
+                    debug_msg(self, match, f"!filtered out {right_m.value!r}")
                 passed = False
                 break
             if passed:
+                if match.debug:
+                    debug_msg(self, match, f"found {left_m.value!r}")
                 yield left_m
 
 
@@ -515,16 +577,20 @@ class Key(JsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.key)
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         this = match.value
         if isinstance(this, dict):
             try:
                 value = this[self.key]
             except KeyError:
-                return
+                if match.debug:
+                    debug_msg(self, match, "!key not found: {key!r}")
             else:
-                yield match.push(self.key, value)
+                if match.debug:
+                    debug_msg(self, match, f"{self.key!r} = {value!r}")
+                yield match.push_parent(self.key, value)
+        elif match.debug:
+            debug_msg(self, match, f"!not a dict: {this!r}")
 
 
 class Index(JsonPath):
@@ -541,26 +607,32 @@ class Index(JsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.index)
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         this = match.value
         if isinstance(this, (list, tuple)):
             ix = self.index
             if isinstance(ix, int):
                 try:
-                    yield match.push(ix, this[ix])
+                    yield match.push_parent(ix, this[ix])
                 except IndexError:
-                    return
+                    if match.debug:
+                        debug_msg(self, match, f"index not found: {ix!r}")
+                else:
+                    if match.debug:
+                        debug_msg(self, match, f"found {this[ix]!r}")
             elif isinstance(ix, slice):
                 start, stop, step = ix.indices(len(this))
                 for i in range(start, stop, step):
-                    yield match.push(i, this[i])
+                    if match.debug:
+                        debug_msg(self, match, f"found {this[i]}")
+                    yield match.push_parent(i, this[i])
 
 
 class Where(UnaryJsonPath):
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
-        for _ in self.child.find(match):
+    def _find(self, match: Match) -> Iterable[Match]:
+        for subm in self.child.find(match):
+            if match.debug:
+                debug_msg(self, match, f"found {subm.value!r}")
             yield match
             break
 
@@ -581,10 +653,11 @@ class Bind(UnaryJsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.name)
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
-        for found in self.child.find(match):
-            yield match.push(found.key, found.value, self.name)
+    def _find(self, match: Match) -> Iterable[Match]:
+        for subm in self.child.find(match):
+            if match.debug:
+                debug_msg(self, match, f"found {subm.value!r}")
+            yield match.push_parent(subm.key, subm.value, self.name)
 
 
 class TransformFunction(JsonPath):
@@ -611,14 +684,15 @@ class TransformFunction(JsonPath):
     def __hash__(self):
         return hash(type(self)) ^ hash(self.fn)
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         value = self.fn(match.value)
+        if match.debug:
+            debug_msg(self, match, f"fn returned {value!r}")
         if self.unwrap:
             for subval in value:
-                yield match.push(None, subval)
+                yield match.push_parent(None, subval)
         else:
-            yield match.push(None, value)
+            yield match.push_parent(None, value)
 
 
 class Comparison(BinaryJsonPath):
@@ -654,10 +728,8 @@ class Comparison(BinaryJsonPath):
                 self.op == other.op and
                 self.right == other.right)
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         op = self.op
-
         # Evaluate the right side once to get the value we will compare to
         for right_m in self.right.find(match):
             right_v = right_m.value
@@ -667,12 +739,21 @@ class Comparison(BinaryJsonPath):
             return
 
         for left_m in self.left.find(match):
+            left_v = left_m.value
             try:
-                passed = op(left_m.value, right_v)
+                passed = op(left_v, right_v)
             except TypeError:
+                if match.debug:
+                    debug_msg(self, match, f"can't compare {left_v}")
                 continue
             if passed:
+                if match.debug:
+                    debug_msg(self, match,
+                                f"found {left_v} {self.op} {right_v}")
                 yield left_m
+            elif match.debug:
+                debug_msg(self, match,
+                            f"!False: {left_v} {self.op} {right_v}")
 
 
 class Math(BinaryJsonPath):
@@ -692,8 +773,7 @@ class Math(BinaryJsonPath):
             op = self.string_to_op[op]
         self.op = op
 
-    def find(self, match: Union[JsonValue, Match]) -> Iterable[Match]:
-        match = ensure(match)
+    def _find(self, match: Match) -> Iterable[Match]:
         op = self.op
 
         # Evaluate the right side once to get the value we will compare to
@@ -706,9 +786,14 @@ class Math(BinaryJsonPath):
 
         for left_m in self.left.find(match):
             left_v = left_m.value
+            if match.debug:
+                debug_msg(self, match, f"left value {left_v}")
+
             if isinstance(left_v, (int, float)):
                 result = op(left_v, right_v)
-                yield match.push(left_v, result)
+                if match.debug:
+                    debug_msg(self, match, f"result {result!r}")
+                yield match.push_parent(left_v, result)
 
 
 transform_functions: dict[str, Callable[[], JsonPath]] = {
@@ -944,7 +1029,8 @@ infixes: dict[Kind, Parselet] = {
     Kind.child: CombiningParselet(Child.make, Precedence.child),
     Kind.desc: CombiningParselet(Descendants, Precedence.binary),
     Kind.merge: CombiningParselet(Merge, Precedence.merge),
-    Kind.or_: CombiningParselet(Or, Precedence.or_),
+    Kind.or_: CombiningParselet(Or, Precedence.logic),
+    Kind.and_: CombiningParselet(And, Precedence.logic),
     Kind.intersect: CombiningParselet(Intersect, Precedence.intersect),
     Kind.bang: CombiningParselet(Discard, Precedence.intersect),
     Kind.less_than_eq: ComparisonParselet(operator.le),

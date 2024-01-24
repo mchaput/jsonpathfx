@@ -466,7 +466,7 @@ def test_intersect_comparison():
     ]
     assert parse("*{kind == 'prim'}.name").values(domain) == ["alfa", "bravo"]
     assert parse("*{x == 20}.name").values(domain) == ["bravo", "delta"]
-    p = parse("*.({kind == 'prim'} & {x == 20}).name")
+    p = parse("*{kind == 'prim' && x == 20}.name")
     assert p.values(domain) == ["bravo"]
 
 
@@ -602,3 +602,20 @@ def test_merge_binding():
     p = parse("geo.comp:(detail|point|vertex).*.name")
     comps = [m.bindings()["comp"] for m in p.find(domain)]
     assert comps == ["detail", "detail", "detail", "point", "vertex", "vertex"]
+
+
+def test_doc_select_where_example():
+    doc = {
+        "things": [
+            {"type": "car", "color": "red", "size": 5, "id": "a"},
+            {"type": "boat", "color": "blue", "size": 2, "id": "b"},
+            {"type": "car", "color": "blue", "size": 3, "id": "c"},
+            {"type": "boat", "color": "red", "size": 6, "id": "d"},
+        ]
+    }
+    # Find IDs of things where color == "red"
+    p = parse("things.*{color == 'red'}.id")
+    assert p.values(doc) == ["a", "d"]
+    # Find IDs of red boats
+    p = parse("things.*{type == 'boat' && color == 'red'}.id")
+    assert p.values(doc) == ["d"]

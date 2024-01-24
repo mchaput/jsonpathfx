@@ -24,13 +24,13 @@ assert jp.values({"foo": {"bar": 10, "baz": 20}}) == [10]
 
 # You can get the matches as a generator instead of a list
 for value in jp.itervalues({"foo": {"bar": 10, "baz": 20}}):
-    print(value)
+  print(value)
 
 # You can get Match objects with a few useful methods if needed
-for match in jp.find(data):
-    print("The value of this match is:", match.value)
-    print("The path to this match is:", match.path())
-    print("The bound key values for this match are:", match.bindings())
+for match in jp._find(data):
+  print("The value of this match is:", match.value)
+  print("The path to this match is:", match.path())
+  print("The bound key values for this match are:", match.bindings())
 ```
 
 `JsonPath.values()` always returns a list of all the values in the given
@@ -52,7 +52,8 @@ list is empty.
 | `*`                | Returns every item in the current list or every value in the current dict.                                                                                    |
 | ``path1 \| path2`` | Finds any items that match `path1` and also any items that match `path2` (union).                                                                             |
 | `path1 & path2`    | Finds any items that match *both* `path1` and `path2` (intersection).                                                                                         |
-| `path1 \|\| path2` | If any items match `path1`, this expression returns those items. Otherwise, it returns any items that match `path2` (or).                                     |
+| `path1 \|\| path2` | If any items match `path1`, this expression returns those items. Otherwise, it returns any items that match `path2` (logical or).                             |
+| `path1 && path2`   | If both expressions match at all, yields matches from `path2` (logical and)                                                                                   |
 | `path1 ! path2`    | Matches results from `path1` if they don't match `path2`                                                                                                      |
 | `{path}`           | Matches if the current item has children that match `path` (contains).                                                                                        |
 | `path1.parent()`   | Finds the parents of any items that match `path1`                                                                                                             |
@@ -70,7 +71,7 @@ list is empty.
   * `()` `{}` (group, contains)
   * `&` (intersect)
   * `|` (union)
-  * `||` (or)
+  * `||` `&&` (logic operators)
   * `==` `!=` `<` `<=` `>` `>=` (comparisons)
   * `+` `-`
   * `*` `/`
@@ -79,6 +80,34 @@ list is empty.
 * You can use parentheses (`()`) to group clauses.
 
 ## Examples
+
+
+## Filtering with {} and comparisons
+
+It's very useful to combine `{}` (contains) syntax with comparisons to filter
+items in an array or object. This is often in a form like `*{x > 5}` (find all
+objects with a key `x` of value greater than 5).
+
+For example:
+
+```python
+from jsonpathfx import parse
+
+doc = {
+    "things": [
+        {"type": "car", "color": "red", "size": 5, "id": "a"},
+        {"type": "boat", "color": "blue", "size": 2, "id": "b"},
+        {"type": "car", "color": "blue", "size": 3, "id": "c"},
+        {"type": "boat", "color": "red", "size": 6, "id": "d"},
+    ]
+}
+# Find IDs of things where color == "red"
+p = parse("things.*{color == 'red'}.id")
+assert p.values(doc) == ["a", "d"]
+# Find IDs of boats that are red
+p = parse("things.*{type == 'boat' && color == 'red'}.id")
+assert p.values(doc) == ["d"]
+```
 
 ## Bindings
 
@@ -104,6 +133,6 @@ returned by `JsonPath.find()`:
 from jsonpathfx import parse
 
 jp = parse("geometry.component:(points|vertices|faces).rows.*")
-for match in jp.find(my_data):
-    print("value=", match.value, "bindings=", match.bindings())
+for match in jp._find(my_data):
+  print("value=", match.value, "bindings=", match.bindings())
 ```
