@@ -56,10 +56,11 @@ list is empty.
 | `path1 && path2`   | If both expressions match at all, yields matches from `path2` (logical and)                                                                                   |
 | `path1 ! path2`    | Matches results from `path1` if they don't match `path2`                                                                                                      |
 | `{path}`           | Matches if the current item has children that match `path` (contains).                                                                                        |
-| `path1.parent()`   | Finds the parents of any items that match `path1`                                                                                                             |
-| `path1.len()`      | Finds the lengths of items that match `path1`.                                                                                                                |
-| `path1.keys()`     | For dicts that match `path1`, this returns the keys.                                                                                                          |
-| `path1.items()`    | For dicts that match `path1`, returns an array of `["key", value]` arrays for the items.                                                                      |
+| `parent()`         | Matches the parent of the current item.                                                                                                                       |
+| `len()`            | If the current item is an array or object, returns it length.                                                                                                 |
+| `keys()`           | If the current item is an object, returns its keys.                                                                                                           |
+| `items()`          | If the current item is an object, yields `["key", value]` arrays each item in the object.                                                                     |
+| `lookup(path)`     | If the current item is an object, and `path` matches a string, looks that string key up in the object. Also works with a list if `path` matches a number.     |
 | `path1 > 5`        | Finds matches of `path1` that return true for the given comparison. You can use `==`, `=`, `!=`, `<`, `<=`, `>`, or `>=`.                                     |  
 | `type == "car"`    | Compares the matchs to a string. With strings you can use an additional operator `=~` which treats the right-hand string as a regular expression.             |
 | `path1 + path2`    | Yields the results of applying an operator (`+`, `-`, `*`, or `/`) between all the matches from `path1` and the first match in `path2`. Only matches numbers. |

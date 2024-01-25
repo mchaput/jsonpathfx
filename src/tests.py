@@ -604,6 +604,19 @@ def test_merge_binding():
     assert comps == ["detail", "detail", "detail", "point", "vertex", "vertex"]
 
 
+def test_lookup():
+    domain = {
+        "selected": "charlie",
+        "items": {
+            "alfa": "bravo",
+            "charlie": "delta",
+            "echo": "foxtrot",
+            "golf": "hotel",
+        }
+    }
+    assert parse("items.lookup($.selected)").values(domain) == ["delta"]
+
+
 def test_doc_select_where_example():
     doc = {
         "things": [
@@ -619,3 +632,4 @@ def test_doc_select_where_example():
     # Find IDs of red boats
     p = parse("things.*{type == 'boat' && color == 'red'}.id")
     assert p.values(doc) == ["d"]
+

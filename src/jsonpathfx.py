@@ -36,7 +36,8 @@ __all__ = (
     "JsonValue", "JsonPath", "ParserError", "BinaryJsonPath", "UnaryJsonPath",
     "Root", "This", "Parent", "Every", "Literal", "Child", "Where",
     "Descendants", "Or", "Merge", "Intersect", "Discard", "Key", "Index",
-    "Bind", "TransformFunction", "Comparison", "Math", "parse",
+    "Bind", "TransformFunction", "LookupComputedKey", "Comparison", "Math",
+    "parse",
 )
 
 
@@ -320,7 +321,7 @@ class JsonPath:
         self._pos = -1
 
     def __repr__(self):
-        return f"<{type(self).__name__}>"
+        return f"{type(self).__name__}()"
 
     def __eq__(self, other):
         # Good enough for "singletons"; classes with parameters should override
@@ -454,7 +455,7 @@ class Every(JsonPath):
 class Child(BinaryJsonPath):
     @classmethod
     def make(cls, left: JsonPath, right: JsonPath) -> JsonPath:
-        if isinstance(left, (This, Root)):
+        if isinstance(left, This):
             return right
         elif isinstance(right, This):
             return left
@@ -695,6 +696,19 @@ class TransformFunction(JsonPath):
             yield match.push_parent(None, value)
 
 
+class LookupComputedKey(UnaryJsonPath):
+    def _find(self, match: Match) -> Iterable[Match]:
+        this = match.value
+        if not isinstance(this, dict):
+            return
+
+        for subm in self.child.find(match):
+            key = subm.value
+            if isinstance(key, str):
+                yield match.push_parent(key, this[key])
+                return
+
+
 class Comparison(BinaryJsonPath):
     # Allow creating an instance with a string instead of a function, to make
     # it easier to compare in tests
@@ -801,6 +815,7 @@ transform_functions: dict[str, Callable[[], JsonPath]] = {
     "sorted": TransformFunction.for_function(sorted),
     "keys": TransformFunction.for_function(get_keys),
     "items": TransformFunction.for_function(get_items, unwrap=True),
+    "lookup": LookupComputedKey,
     "parent": Parent,
 }
 
