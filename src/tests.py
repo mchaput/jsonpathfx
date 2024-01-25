@@ -217,6 +217,21 @@ def test_parse_bind():
     )
 
 
+def test_parse_comment():
+    p = parse("""
+    foo.    # Lookup the 'foo' key at the root level
+    k:*.    # If the following clause matches, bind the key to 'k'
+    bar     # Lookup the bar key
+    """)
+    assert p == Child(
+        Child(
+            Key("foo"),
+            Bind(Every(), "k"),
+        ),
+        Key("bar")
+    )
+
+
 def test_items():
     domain = {
         "detail": ["d1", "d2"],
@@ -632,4 +647,3 @@ def test_doc_select_where_example():
     # Find IDs of red boats
     p = parse("things.*{type == 'boat' && color == 'red'}.id")
     assert p.values(doc) == ["d"]
-

@@ -85,6 +85,7 @@ class Kind(enum.Enum):
     greater_than_eq = enum.auto()  # >=
     not_eq = enum.auto()  # !=
     regex = enum.auto()  # ~=
+    comment = enum.auto()  # #...
 
 
 class Precedence(enum.IntEnum):
@@ -209,6 +210,7 @@ token_exprs: dict[Kind, Union[str, Pattern, LexerFn]] = {
     Kind.not_eq: "!=",
     Kind.regex: "~=",
     Kind.bang: "!",
+    Kind.comment: re.compile("#([^\n]*)")
 }
 
 
@@ -242,7 +244,9 @@ def lex(text: str) -> list[Token]:
             raise ParserError(f"Parsing went backwards at {pos}: "
                               f"{token} -> {new_pos}")
         pos = new_pos
-        tokens.append(token)
+
+        if token.kind != Kind.comment:
+            tokens.append(token)
     return tokens
 
 

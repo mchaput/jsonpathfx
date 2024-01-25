@@ -66,6 +66,17 @@ list is empty.
 | `path1 + path2`    | Yields the results of applying an operator (`+`, `-`, `*`, or `/`) between all the matches from `path1` and the first match in `path2`. Only matches numbers. |
 | `name:path`        | Binds the _key_ or _index_ that matched in the path to the given name (see "bindings" below)                                                                  |
 
+You can use Python-style line comments, which may be useful for "verbose"
+multi-line path definitions:
+
+```python
+p = parse("""
+foo.    # Lookup the 'foo' key at the root level
+k:*.    # Try every key, bind the matching one to 'k'
+bar     # Lookup the bar key
+""")
+```
+
 ## Grouping
 
 * Operators have the following relative binding strength, from *loosest* to *tightest* binding:
