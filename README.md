@@ -24,13 +24,13 @@ assert jp.values({"foo": {"bar": 10, "baz": 20}}) == [10]
 
 # You can get the matches as a generator instead of a list
 for value in jp.itervalues({"foo": {"bar": 10, "baz": 20}}):
-  print(value)
+    print(value)
 
 # You can get Match objects with a few useful methods if needed
 for match in jp._find(data):
-  print("The value of this match is:", match.value)
-  print("The path to this match is:", match.path())
-  print("The bound key values for this match are:", match.bindings())
+    print("The value of this match is:", match.value)
+    print("The path to this match is:", match.path())
+    print("The bound key values for this match are:", match.bindings())
 ```
 
 `JsonPath.values()` always returns a list of all the values in the given
@@ -146,5 +146,5 @@ from jsonpathfx import parse
 
 jp = parse("geometry.component:(points|vertices|faces).rows.*")
 for match in jp._find(my_data):
-  print("value=", match.value, "bindings=", match.bindings())
+    print("value=", match.value, "bindings=", match.bindings())
 ```
