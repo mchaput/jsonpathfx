@@ -71,6 +71,7 @@ class Kind(enum.Enum):
     close_brace = enum.auto()  # }
     comma = enum.auto()  # ,
     colon = enum.auto()  # :
+    call = enum.auto()  # fn(
     name = enum.auto()  # name
     number = enum.auto()  # 1
     string = enum.auto()  # 'string'
@@ -86,6 +87,8 @@ class Kind(enum.Enum):
     not_eq = enum.auto()  # !=
     regex = enum.auto()  # ~=
     comment = enum.auto()  # #...
+    true = enum.auto()
+    false = enum.auto()
 
 
 class Precedence(enum.IntEnum):
@@ -199,6 +202,9 @@ token_exprs: dict[Kind, Union[str, Pattern, LexerFn]] = {
     Kind.close_brace: "}",
     Kind.comma: ",",
     Kind.colon: ":",
+    Kind.true: "true",
+    Kind.false: "false",
+    Kind.call: re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*[(]"),
     Kind.number: re.compile(r"(-?\d+([.]\d*(e\d+)?)?)|([.]\d+([eE]\d*)?)"),
     Kind.bind: re.compile(r"(\w+):", re.UNICODE),
     Kind.name: re.compile(r"(\w+)", re.UNICODE),
@@ -871,9 +877,14 @@ class KeyParselet(Parselet):
 
 class LiteralParselet(Parselet):
     def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
-        if token.kind == Kind.string:
+        kind = token.kind
+        if kind == Kind.true:
+            return Literal(True)
+        elif kind == Kind.false:
+            return Literal(False)
+        elif kind == Kind.string:
             return Literal(token.payload)
-        elif token.kind == Kind.number:
+        elif kind == Kind.number:
             num_str = token.payload
             try:
                 number = ast.literal_eval(num_str)
@@ -1009,11 +1020,8 @@ class MathParselet(AbstractOperatorParselet):
 
 
 class CallParselet(Parselet):
-    def parse_infix(self, parser: Parser, left: JsonPath, token: Token
-              ) -> JsonPath:
-        if not isinstance(left, Key):
-            raise ParserError(f"Unexpected left bracket at {token.pos}")
-        fn_name = left.key
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        fn_name = token.payload
 
         args: list[JsonPath] = []
         if not parser.take(Kind.close_paren):
@@ -1044,6 +1052,7 @@ prefixes: dict[Kind, Parselet] = {
     Kind.this: SingletonParselet(This()),
     Kind.star: SingletonParselet(Every()),
     Kind.bind: BindParselet(),
+    Kind.call: CallParselet(),
     Kind.open_paren: GroupParselet(),
     Kind.open_square: IndexParselet(),
     Kind.open_brace: WhereParselet(),
@@ -1066,7 +1075,6 @@ infixes: dict[Kind, Parselet] = {
     Kind.minus: MathParselet(operator.sub, Precedence.sum),
     Kind.star: MathParselet(operator.mul, Precedence.product),
     Kind.divide: MathParselet(operator.truediv, Precedence.product),
-    Kind.open_paren: CallParselet(),
     Kind.open_square: IndexParselet(),
     Kind.open_brace: WhereParselet(),
 }

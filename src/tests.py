@@ -69,7 +69,7 @@ def test_parse_bracketed_child_key():
 
 def test_parse_root():
     assert parse("$") == Root()
-    assert parse("$.foo") == Key("foo")
+    assert parse("$.foo") == Child(Root(), Key("foo"))
     assert parse("foo.$") == Root()
 
 
@@ -187,7 +187,7 @@ def test_parse_compare():
 
 
 def test_parse_compare_compound_path():
-    p = parse("$.*.size > 15")
+    p = parse("*.size > 15")
     assert p == Comparison(
         Child(
             Every(),
