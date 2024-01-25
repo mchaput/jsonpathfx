@@ -1,4 +1,5 @@
 # jsonpathfx
+
 Fast, modern, idiosyncratic jsonpath implementation in pure Python
 
 ## About
@@ -57,9 +58,9 @@ list is empty.
 | `path1 ! path2`    | Matches results from `path1` if they don't match `path2`                                                                                                      |
 | `{path}`           | Matches if the current item has children that match `path` (contains).                                                                                        |
 | `parent()`         | Matches the parent of the current item.                                                                                                                       |
-| `len()`            | If the current item is an array or object, returns it length.                                                                                                 |
-| `keys()`           | If the current item is an object, returns its keys.                                                                                                           |
-| `items()`          | If the current item is an object, yields `["key", value]` arrays each item in the object.                                                                     |
+| `len()`            | If the current item is an array or object, returns its length.                                                                                                |
+| `keys()`           | If the current item is an object, yields its keys.                                                                                                            |
+| `items()`          | If the current item is an object, yields `["key", value]` pairs for each item in the object.                                                                  |
 | `lookup(path)`     | If the current item is an object, and `path` matches a string, looks that string key up in the object. Also works with a list if `path` matches a number.     |
 | `path1 > 5`        | Finds matches of `path1` that return true for the given comparison. You can use `==`, `=`, `!=`, `<`, `<=`, `>`, or `>=`.                                     |  
 | `type == "car"`    | Compares the matchs to a string. With strings you can use an additional operator `=~` which treats the right-hand string as a regular expression.             |
@@ -93,6 +94,15 @@ bar     # Lookup the bar key
 
 ## Examples
 
+
+## Comparisons
+
+The left and right hand side of a comparison are treated specially in some ways.
+
+* A comparison yields items from the _left_ side (for which the comparison
+  returns true).
+* A quoted string on thr _right_ side is treated as a string to compare to,
+  instead of a key match as it would be normally. 
 
 ## Filtering with {} and comparisons
 

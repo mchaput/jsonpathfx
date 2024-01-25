@@ -113,12 +113,16 @@ ws_expr = re.compile(r"\s+")
 # slice_expr = re.compile(r"(\s*-?\d+\s*)?:(\s*-?\d+\s*)?(:-?\d+)?")
 
 
-def hashable(value: JsonValue) -> Union[int, float, str, tuple]:
+def hashable(value: JsonValue) -> Union[bool, int, float, str, tuple]:
+    # Converts json values to hashable versions of themselves
     if isinstance(value, list):
+        # Convert a list to a tuple
         return tuple(hashable(x) for x in value)
     elif isinstance(value, dict):
+        # Convert a dict to a tuple of (key, value) pairs
         return tuple((k, hashable(v)) for k, v in value.items())
     else:
+        # All other valid JSON value types should be hashable
         return value
 
 
