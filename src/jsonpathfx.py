@@ -37,6 +37,7 @@ __all__ = (
     "Root", "This", "Parent", "Every", "Literal", "Child", "Where",
     "Descendants", "Or", "Merge", "Intersect", "Discard", "Key", "Index",
     "Bind", "TransformFunction", "LookupComputedKey", "Comparison", "Math",
+    # "Var",
     "parse",
 )
 
@@ -55,6 +56,7 @@ class Kind(enum.Enum):
     eof = enum.auto()
     root = enum.auto()  # $
     this = enum.auto()  # @
+    # var = enum.auto()  # %name
     child = enum.auto()  # .
     desc = enum.auto()  # ..
     star = enum.auto()  # *
@@ -75,7 +77,7 @@ class Kind(enum.Enum):
     name = enum.auto()  # name
     number = enum.auto()  # 1
     string = enum.auto()  # 'string'
-    bind = enum.auto()  # <name>
+    bind = enum.auto()  # name:
     plus = enum.auto()  # +
     minus = enum.auto()  # -
     divide = enum.auto()  # /
@@ -187,6 +189,7 @@ token_exprs: dict[Kind, Union[str, Pattern, LexerFn]] = {
     # should come first
     Kind.root: "$",
     Kind.this: "@",
+    # Kind.var: re.compile(r"%(\w+)"),
     Kind.desc: "..",
     Kind.child: ".",
     Kind.star: "*",
@@ -265,6 +268,7 @@ class Match(NamedTuple):
     key: str | int | None
     parents: tuple[Match, ...]
     name: Optional[str] = None
+    env: Optional[dict[str, JsonValue]] = None
     debug: bool = False
     debug_indent: int = 0
 
@@ -275,13 +279,17 @@ class Match(NamedTuple):
         else:
             return self
 
+    def replace_value(self, value: JsonValue) -> Match:
+        return Match(value, self.key, self.parents, self.name, self.env,
+                     self.debug, self.debug_indent)
+
     def push_parent(self, key: str | int | None,
                     value: JsonValue, name: str = None) -> Match:
         if not isinstance(key, (int, float, str)) and key is not None:
             raise TypeError(f"Can't use {type(key)} as key")
         if not isinstance(value, (int, float, str, dict, list, tuple)):
             raise TypeError(f"Can't use {type(value)} as value")
-        return Match(value, key, self.parents + (self,), name, self.debug,
+        return Match(value, key, self.parents + (self,), name, None, self.debug,
                      self.debug_indent + 1)
 
     def path(self) -> Sequence[str | int | None]:
@@ -290,15 +298,17 @@ class Match(NamedTuple):
     def bindings(self) -> dict[str, JsonValue]:
         if self.parents:
             bindings = self.parents[-1].bindings()
+        elif self.env:
+            bindings = self.env.copy()
         else:
             bindings = {}
         if self.name:
             bindings[self.name] = self.key
         return bindings
 
-    def plus_level(self) -> Match:
+    def add_debug_level(self) -> Match:
         if self.debug:
-            return Match(self.value, self.key, self.parents, self.name,
+            return Match(self.value, self.key, self.parents, self.name, None,
                          self.debug, self.debug_indent + 1)
         else:
             return self
@@ -345,22 +355,25 @@ class JsonPath:
         # Good enough for "singletons"; classes with parameters should override
         return hash(type(self))
 
-    def find(self, match: Union[JsonValue, Match], debug=False
+    def find(self, match: Union[JsonValue, Match],
+             env: dict[str, JsonValue] = None, debug=False
              ) -> Iterable[Match]:
         if isinstance(match, Match):
-            match = match.plus_level()
+            match = match.add_debug_level()
         else:
-            match = Match(match, None, (), None, debug)
+            match = Match(match, None, (), None, env, debug)
         return self._find(match)
 
     def _find(self, match: Match) -> Iterable[Match]:
         raise NotImplementedError
 
-    def values(self, data: JsonValue, debug=False) -> Sequence[JsonValue]:
-        return list(self.itervalues(data, debug=debug))
+    def values(self, data: JsonValue, env: dict[str, JsonValue] = None,
+               debug=False) -> Sequence[JsonValue]:
+        return list(self.itervalues(data, env=env, debug=debug))
 
-    def itervalues(self, data: JsonValue, debug=False) -> Iterable[JsonValue]:
-        return (match.value for match in self.find(data, debug=debug))
+    def itervalues(self, data: JsonValue, env: dict[str, JsonValue] = None,
+                   debug=False) -> Iterable[JsonValue]:
+        return (match.value for match in self.find(data, env=env, debug=debug))
 
     def pos(self) -> int:
         return self._pos
@@ -439,6 +452,28 @@ class Parent(JsonPath):
             yield match.parents[-1]
         elif match.debug:
             debug_msg(self, match, "!no parent")
+
+
+class Integer(JsonPath):
+    def _find(self, match: Match) -> Iterable[Match]:
+        if isinstance(match.value, (str, int, float)):
+            try:
+                integer = int(float(match.value))
+            except ValueError:
+                pass
+            else:
+                yield match.replace_value(integer)
+
+
+class Float(JsonPath):
+    def _find(self, match: Match) -> Iterable[Match]:
+        if isinstance(match.value, (str, int, float)):
+            try:
+                number = float(match.value)
+            except ValueError:
+                pass
+            else:
+                yield match.replace_value(number)
 
 
 class Literal(JsonPath):
@@ -578,6 +613,32 @@ class Discard(BinaryJsonPath):
                 yield left_m
 
 
+# class Var(JsonPath):
+#     def __init__(self, name: str):
+#         super().__init__()
+#         self.name = name
+#
+#     def __repr__(self):
+#         return f"{type(self).__name__}({self.name!r})"
+#
+#     def __eq__(self, other):
+#         return type(self) is type(other) and self.name == other.name
+#
+#     def __hash__(self):
+#         return hash(type(self)) ^ hash(self.name)
+#
+#     def _find(self, match: Match) -> Iterable[Match]:
+#         name = self.name
+#         bindings = match.bindings()
+#         if name in bindings:
+#             value = bindings[name]
+#             if match.debug:
+#                 debug_msg(self, match, f"%{name} = {value!r}")
+#             yield match.push_parent(name, value)
+#         elif match.debug:
+#             debug_msg(self, match, f"!var not found: %{name}")
+
+
 class Key(JsonPath):
     def __init__(self, key: str):
         super().__init__()
@@ -593,19 +654,21 @@ class Key(JsonPath):
         return hash(type(self)) ^ hash(self.key)
 
     def _find(self, match: Match) -> Iterable[Match]:
+        key = self.key
         this = match.value
-        if isinstance(this, dict):
+        if isinstance(this, dict) or \
+                (isinstance(this, (list, tuple)) and isinstance(key, int)):
             try:
-                value = this[self.key]
-            except KeyError:
+                value = this[key]
+            except (KeyError, IndexError):
                 if match.debug:
                     debug_msg(self, match, "!key not found: {key!r}")
             else:
                 if match.debug:
                     debug_msg(self, match, f"{self.key!r} = {value!r}")
-                yield match.push_parent(self.key, value)
+                yield match.push_parent(key, value)
         elif match.debug:
-            debug_msg(self, match, f"!not a dict: {this!r}")
+            debug_msg(self, match, f"!inappropriate type: {this!r}")
 
 
 class Index(JsonPath):
@@ -831,6 +894,8 @@ transform_functions: dict[str, Callable[[], JsonPath]] = {
     "items": TransformFunction.for_function(get_items, unwrap=True),
     "lookup": LookupComputedKey,
     "parent": Parent,
+    "int": Integer,
+    "float": Float,
 }
 
 
@@ -873,6 +938,11 @@ class SingletonParselet(Parselet):
 class KeyParselet(Parselet):
     def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
         return Key(token.payload)
+
+
+# class VarParselet(Parselet):
+#     def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+#         return Var(token.payload)
 
 
 class LiteralParselet(Parselet):
@@ -1050,6 +1120,7 @@ prefixes: dict[Kind, Parselet] = {
     Kind.string: KeyParselet(),
     Kind.root: SingletonParselet(Root()),
     Kind.this: SingletonParselet(This()),
+    # Kind.var: VarParselet(),
     Kind.star: SingletonParselet(Every()),
     Kind.bind: BindParselet(),
     Kind.call: CallParselet(),
@@ -1168,4 +1239,3 @@ def parse(text: str) -> JsonPath:
     if simple_path_expr.match(text):
         return _fast_keypath(text)
     return Parser(text).parse()
-

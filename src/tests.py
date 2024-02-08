@@ -632,6 +632,34 @@ def test_lookup():
     assert parse("items.lookup($.selected)").values(domain) == ["delta"]
 
 
+# def test_var():
+#     assert parse("foo.%bar.baz") == Child(Child(Key('foo'), Var('bar')),
+#                                           Key('baz'))
+#
+#     domain = {
+#         "echo": {
+#             "alfa": "bravo",
+#             "charlie": "delta"
+#         }
+#     }
+#     env = {"foo": "charlie"}
+#     p = parse("echo[%foo]")
+#     assert p.values(domain, env=env) == ["delta"]
+
+
+def test_integer_and_float():
+    domain = {
+        "alfa": "12",
+        "bravo": "34.7"
+    }
+    assert parse("alfa.int()").values(domain) == [12]
+    assert parse("bravo.int()").values(domain) == [34]
+
+    fs = parse("alfa.float()").values(domain)
+    assert fs == [12.0] and isinstance(fs[0], float)
+    assert parse("bravo.float()").values(domain) == [34.7]
+
+
 def test_doc_select_where_example():
     doc = {
         "things": [

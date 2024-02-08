@@ -62,10 +62,13 @@ list is empty.
 | `keys()`           | If the current item is an object, yields its keys.                                                                                                            |
 | `items()`          | If the current item is an object, yields `["key", value]` pairs for each item in the object.                                                                  |
 | `lookup(path)`     | If the current item is an object, and `path` matches a string, looks that string key up in the object. Also works with a list if `path` matches a number.     |
+| `int()`            | Converts the current item to an integer. Only matches if the current item can be converted to an int.                                                         |
+| `float()`          | Converts the current item to a float. Only matches if the current item can be converted to a float.                                                           |
 | `path1 > 5`        | Finds matches of `path1` that return true for the given comparison. You can use `==`, `=`, `!=`, `<`, `<=`, `>`, or `>=`.                                     |  
 | `type == "car"`    | Compares the matchs to a string. With strings you can use an additional operator `=~` which treats the right-hand string as a regular expression.             |
 | `path1 + path2`    | Yields the results of applying an operator (`+`, `-`, `*`, or `/`) between all the matches from `path1` and the first match in `path2`. Only matches numbers. |
 | `name:path`        | Binds the _key_ or _index_ that matched in the path to the given name (see "bindings" below)                                                                  |
+| `%varname`         | Yields the value of the named variable. The variable can be a previous binding or a value from the dict passed to the `env` keyword argument.                 |
 
 You can use Python-style line comments, which may be useful for "verbose"
 multi-line path definitions:
@@ -158,3 +161,8 @@ jp = parse("geometry.component:(points|vertices|faces).rows.*")
 for match in jp._find(my_data):
     print("value=", match.value, "bindings=", match.bindings())
 ```
+
+
+## Using variables
+
+
