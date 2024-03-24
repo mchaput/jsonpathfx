@@ -660,6 +660,42 @@ def test_integer_and_float():
     assert parse("bravo.float()").values(domain) == [34.7]
 
 
+def test_suffix_ops():
+    domain = {
+        "lop_prim_stats": {
+            "Material:Total": 2011,
+            "DiskLight:Total": 14,
+            "Camera:Total": 1,
+        }
+    }
+    p = parse("$.lop_prim_stats.items(){[0].endswith(':Total')}")
+    assert p.values(domain) == [
+        ["Material:Total", 2011],
+        ["DiskLight:Total", 14],
+        ["Camera:Total", 1],
+    ]
+    p = parse("$.lop_prim_stats.items()[0]{endswith(':Total')}.removesuffix(':Total')")
+    assert p.values(domain) == ["Material", "DiskLight", "Camera"]
+
+
+def test_prefix_ops():
+    domain = {
+        "pre:a": 100,
+        "pre:b": 200,
+        "c": 300,
+        "d": 400,
+        "pre:e": 500
+    }
+    p = parse("$.items(){[0].startswith('pre:')}")
+    assert p.values(domain) == [
+        ["pre:a", 100],
+        ["pre:b", 200],
+        ["pre:e", 500],
+    ]
+    p = parse("$.items()[0]{startswith('pre:')}.removeprefix('pre:')")
+    assert p.values(domain) == ["a", "b", "e"]
+
+
 def test_doc_select_where_example():
     doc = {
         "things": [
@@ -675,3 +711,12 @@ def test_doc_select_where_example():
     # Find IDs of red boats
     p = parse("things.*{type == 'boat' && color == 'red'}.id")
     assert p.values(doc) == ["d"]
+
+
+def test_bind_none():
+    doc = {
+        "groups": None,
+    }
+    p = parse("$.groups.comp:(primitive|edge|point|vertex).*")
+    assert p.values(doc) == []
+

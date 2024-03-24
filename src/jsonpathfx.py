@@ -287,7 +287,8 @@ class Match(NamedTuple):
                     value: JsonValue, name: str = None) -> Match:
         if not isinstance(key, (int, float, str)) and key is not None:
             raise TypeError(f"Can't use {type(key)} as key")
-        if not isinstance(value, (int, float, str, dict, list, tuple)):
+        if value is not None and not isinstance(value, (int, float, str, dict,
+                                                        list, tuple)):
             raise TypeError(f"Can't use {type(value)} as value")
         return Match(value, key, self.parents + (self,), name, None, self.debug,
                      self.debug_indent + 1)
@@ -381,6 +382,9 @@ class JsonPath:
     def set_pos(self, pos: int) -> None:
         self._pos = pos
 
+    def literal_value(self) -> Optional[JsonValue]:
+        return None
+
 
 class BinaryJsonPath(JsonPath):
     # Abstract base path for binary path operators
@@ -457,23 +461,57 @@ class Parent(JsonPath):
 class Integer(JsonPath):
     def _find(self, match: Match) -> Iterable[Match]:
         if isinstance(match.value, (str, int, float)):
-            try:
-                integer = int(float(match.value))
-            except ValueError:
-                pass
-            else:
-                yield match.replace_value(integer)
+            yield match.replace_value(int(float(match.value)))
 
 
 class Float(JsonPath):
     def _find(self, match: Match) -> Iterable[Match]:
         if isinstance(match.value, (str, int, float)):
-            try:
-                number = float(match.value)
-            except ValueError:
-                pass
-            else:
-                yield match.replace_value(number)
+            yield match.replace_value(float(match.value))
+
+
+class StartsWith(JsonPath):
+    def __init__(self, prefix: JsonPath):
+        super().__init__()
+        self.prefix = prefix.literal_value()
+
+    def _find(self, match: Match) -> Iterable[Match]:
+        if self.prefix is not None:
+            value = match.value
+            if isinstance(value, str) and value.startswith(self.prefix):
+                yield match
+
+
+class EndsWith(JsonPath):
+    def __init__(self, suffix: JsonPath):
+        super().__init__()
+        self.suffix = suffix.literal_value()
+
+    def _find(self, match: Match) -> Iterable[Match]:
+        if self.suffix is not None:
+            value = match.value
+            if isinstance(value, str) and value.endswith(self.suffix):
+                yield match
+
+
+class RemovePrefix(JsonPath):
+    def __init__(self, prefix: JsonPath):
+        super().__init__()
+        self.prefix = prefix.literal_value()
+
+    def _find(self, match: Match) -> Iterable[Match]:
+        if self.prefix is not None and isinstance(match.value, str):
+            yield match.replace_value(match.value.removeprefix(self.prefix))
+
+
+class RemoveSuffix(JsonPath):
+    def __init__(self, suffix: JsonPath):
+        super().__init__()
+        self.suffix = suffix.literal_value()
+
+    def _find(self, match: Match) -> Iterable[Match]:
+        if self.suffix is not None and isinstance(match.value, str):
+            yield match.replace_value(match.value.removesuffix(self.suffix))
 
 
 class Literal(JsonPath):
@@ -494,6 +532,9 @@ class Literal(JsonPath):
         if match.debug:
             debug_msg(self, match, f"found literal {self.literal}")
         yield match.push_parent(self.literal, self.literal)
+
+    def literal_value(self) -> Optional[JsonValue]:
+        return self.literal
 
 
 class Every(JsonPath):
@@ -669,6 +710,9 @@ class Key(JsonPath):
                 yield match.push_parent(key, value)
         elif match.debug:
             debug_msg(self, match, f"!inappropriate type: {this!r}")
+
+    def literal_value(self) -> Optional[JsonValue]:
+        return self.key
 
 
 class Index(JsonPath):
@@ -896,6 +940,10 @@ transform_functions: dict[str, Callable[[], JsonPath]] = {
     "parent": Parent,
     "int": Integer,
     "float": Float,
+    "startswith": StartsWith,
+    "endswith": EndsWith,
+    "removeprefix": RemovePrefix,
+    "removesuffix": RemoveSuffix,
 }
 
 
