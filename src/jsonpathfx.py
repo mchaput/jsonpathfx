@@ -37,8 +37,7 @@ __all__ = (
     "Root", "This", "Parent", "Every", "Literal", "Child", "Where",
     "Descendants", "Or", "Merge", "Intersect", "Discard", "Key", "Index",
     "Bind", "TransformFunction", "LookupComputedKey", "Comparison", "Math",
-    # "Var",
-    "parse",
+    "Wildcard", "parse",
 )
 
 
@@ -56,7 +55,7 @@ class Kind(enum.Enum):
     eof = enum.auto()
     root = enum.auto()  # $
     this = enum.auto()  # @
-    # var = enum.auto()  # %name
+    var = enum.auto()  # %name
     child = enum.auto()  # .
     desc = enum.auto()  # ..
     star = enum.auto()  # *
@@ -75,6 +74,7 @@ class Kind(enum.Enum):
     colon = enum.auto()  # :
     call = enum.auto()  # fn(
     name = enum.auto()  # name
+    wildcard = enum.auto()  # foo*
     number = enum.auto()  # 1
     string = enum.auto()  # 'string'
     bind = enum.auto()  # name:
@@ -189,10 +189,9 @@ token_exprs: dict[Kind, Union[str, Pattern, LexerFn]] = {
     # should come first
     Kind.root: "$",
     Kind.this: "@",
-    # Kind.var: re.compile(r"%(\w+)"),
+    Kind.var: re.compile(r"%(\s+)"),
     Kind.desc: "..",
     Kind.child: ".",
-    Kind.star: "*",
     Kind.or_: "||",
     Kind.and_: "&&",
     Kind.merge: "|",
@@ -210,6 +209,8 @@ token_exprs: dict[Kind, Union[str, Pattern, LexerFn]] = {
     Kind.call: re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*[(]"),
     Kind.number: re.compile(r"(-?\d+([.]\d*(e\d+)?)?)|([.]\d+([eE]\d*)?)"),
     Kind.bind: re.compile(r"(\w+):", re.UNICODE),
+    Kind.wildcard: re.compile(r"(([*]\w+)+[*]?|(\w+[*])+\w*)"),
+    Kind.star: "*",
     Kind.name: re.compile(r"(\w+)", re.UNICODE),
     Kind.string: lex_string_literal,
     Kind.plus: "+",
@@ -368,13 +369,11 @@ class JsonPath:
     def _find(self, match: Match) -> Iterable[Match]:
         raise NotImplementedError
 
-    def values(self, data: JsonValue, env: dict[str, JsonValue] = None,
-               debug=False) -> Sequence[JsonValue]:
-        return list(self.itervalues(data, env=env, debug=debug))
+    def values(self, data: JsonValue, debug=False) -> Sequence[JsonValue]:
+        return list(self.itervalues(data, debug=debug))
 
-    def itervalues(self, data: JsonValue, env: dict[str, JsonValue] = None,
-                   debug=False) -> Iterable[JsonValue]:
-        return (match.value for match in self.find(data, env=env, debug=debug))
+    def itervalues(self, data: JsonValue, debug=False) -> Iterable[JsonValue]:
+        return (match.value for match in self.find(data, debug=debug))
 
     def pos(self) -> int:
         return self._pos
@@ -654,30 +653,30 @@ class Discard(BinaryJsonPath):
                 yield left_m
 
 
-# class Var(JsonPath):
-#     def __init__(self, name: str):
-#         super().__init__()
-#         self.name = name
-#
-#     def __repr__(self):
-#         return f"{type(self).__name__}({self.name!r})"
-#
-#     def __eq__(self, other):
-#         return type(self) is type(other) and self.name == other.name
-#
-#     def __hash__(self):
-#         return hash(type(self)) ^ hash(self.name)
-#
-#     def _find(self, match: Match) -> Iterable[Match]:
-#         name = self.name
-#         bindings = match.bindings()
-#         if name in bindings:
-#             value = bindings[name]
-#             if match.debug:
-#                 debug_msg(self, match, f"%{name} = {value!r}")
-#             yield match.push_parent(name, value)
-#         elif match.debug:
-#             debug_msg(self, match, f"!var not found: %{name}")
+class Var(JsonPath):
+    def __init__(self, name: str):
+        super().__init__()
+        self.name = name
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.name!r})"
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.name == other.name
+
+    def __hash__(self):
+        return hash(type(self)) ^ hash(self.name)
+
+    def _find(self, match: Match) -> Iterable[Match]:
+        name = self.name
+        bindings = match.bindings()
+        if name in bindings:
+            value = bindings[name]
+            if match.debug:
+                debug_msg(self, match, f"%{name} = {value!r}")
+            yield match.push_parent(name, value)
+        elif match.debug:
+            debug_msg(self, match, f"!var not found: %{name}")
 
 
 class Key(JsonPath):
@@ -713,6 +712,15 @@ class Key(JsonPath):
 
     def literal_value(self) -> Optional[JsonValue]:
         return self.key
+
+
+class Wildcard(JsonPath):
+    def __init__(self, pattern: str):
+        super().__init__()
+        self.pattern = pattern
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.pattern!r})"
 
 
 class Index(JsonPath):
@@ -988,9 +996,9 @@ class KeyParselet(Parselet):
         return Key(token.payload)
 
 
-# class VarParselet(Parselet):
-#     def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
-#         return Var(token.payload)
+class VarParselet(Parselet):
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        return Var(token.payload)
 
 
 class LiteralParselet(Parselet):
@@ -1070,6 +1078,11 @@ class BindParselet(Parselet):
 
     def precedence(self) -> int:
         return Precedence.bind
+
+
+class WildcardParselet(Parselet):
+    def parse_prefix(self, parser: Parser, token: Token) -> JsonPath:
+        return Wildcard(token.payload)
 
 
 class UnaryParslet(Parselet):
@@ -1168,8 +1181,9 @@ prefixes: dict[Kind, Parselet] = {
     Kind.string: KeyParselet(),
     Kind.root: SingletonParselet(Root()),
     Kind.this: SingletonParselet(This()),
-    # Kind.var: VarParselet(),
+    Kind.var: VarParselet(),
     Kind.star: SingletonParselet(Every()),
+    Kind.wildcard: WildcardParselet(),
     Kind.bind: BindParselet(),
     Kind.call: CallParselet(),
     Kind.open_paren: GroupParselet(),

@@ -47,6 +47,7 @@ list is empty.
 | `key`              | Looks up the string in the current dictionary.                                                                                                                |
 | `'key'` or `"key"` | Looks up the string in the current dictionary. Use this for keys with non-alphanumeric characters. You can escape characters using backslash.                 |
 | `[num]`            | Looks up the `num`th item in the current list. You can also use Python slice syntax, such as `[1:-2]` or `[::2]`                                              |
+| `foo*`             | You can use a simple wildcard (stars only) in place of a bare key.                                                                                            |
 | `path1.path2`      | Finds items that match `path2` that are children of items matching `path1`.                                                                                   |
 | `path1[path2]`     | Same as `path1.(path2)`                                                                                                                                       |
 | `path1..path2`     | Recursively finds items that match `path2` that are descendants of of items matching `path1`.                                                                 |

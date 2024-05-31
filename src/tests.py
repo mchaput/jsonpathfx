@@ -232,6 +232,52 @@ def test_parse_comment():
     )
 
 
+def test_parse_wildcard():
+    assert parse("$.foo*.bar") == Child(
+        Child(
+            Root(),
+            Wildcard("foo*")
+        ),
+        Key("bar")
+    )
+    assert parse("$.foo*bar.baz") == Child(
+        Child(
+            Root(),
+            Wildcard("foo*bar")
+        ),
+        Key("baz")
+    )
+    assert parse("$.foo*bar*.baz") == Child(
+        Child(
+            Root(),
+            Wildcard("foo*bar*")
+        ),
+        Key("baz")
+    )
+    assert parse("$.*foo.bar") == Child(
+        Child(
+            Root(),
+            Wildcard("*foo")
+        ),
+        Key("bar")
+    )
+    assert parse("$.*foo*.bar") == Child(
+        Child(
+            Root(),
+            Wildcard("*foo*")
+        ),
+        Key("bar")
+    )
+    with pytest.raises(ParserError):
+        print(parse("$.**.bar"))
+    with pytest.raises(ParserError):
+        print(parse("$.foo**.bar"))
+    with pytest.raises(ParserError):
+        print(parse("$.**foo.bar"))
+    with pytest.raises(ParserError):
+        print(parse("$.foo**bar.bar"))
+
+
 def test_items():
     domain = {
         "detail": ["d1", "d2"],
@@ -713,10 +759,9 @@ def test_doc_select_where_example():
     assert p.values(doc) == ["d"]
 
 
-def test_bind_none():
+def test_capture_none():
     doc = {
         "groups": None,
     }
     p = parse("$.groups.comp:(primitive|edge|point|vertex).*")
     assert p.values(doc) == []
-
