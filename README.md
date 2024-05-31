@@ -56,7 +56,7 @@ list is empty.
 | `path1 & path2`    | Finds any items that match *both* `path1` and `path2` (intersection).                                                                                         |
 | `path1 \|\| path2` | If any items match `path1`, this expression returns those items. Otherwise, it returns any items that match `path2` (logical or).                             |
 | `path1 && path2`   | If _both_ expressions match _at least one_ item, yields matches from `path2` (logical and)                                                                    |
-| `path1 ! path2`    | Matches results from `path1` if they don't match `path2`                                                                                                      |
+| `path1 ! path2`    | Subtracts matchs of path2 from matches of path1                                                                                                               |
 | `{path}`           | Matches if the current item has children that match `path` (contains).                                                                                        |
 | `parent()`         | Matches the parent of the current item.                                                                                                                       |
 | `len()`            | If the current item is an array or object, returns its length.                                                                                                |

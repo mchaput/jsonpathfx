@@ -615,9 +615,9 @@ class Merge(BinaryJsonPath):
             if match.debug:
                 debug_msg(self, match, f"left found {subm.value!r}")
             yield subm
-            seen.add(id(subm.value))
+            seen.add(hashable(subm.value))
         for subm in self.right.find(match):
-            if id(subm.value) not in seen:
+            if hashable(subm.value) not in seen:
                 if match.debug:
                     debug_msg(self, match, f"right found {subm.value!r}")
                 yield subm
@@ -625,7 +625,7 @@ class Merge(BinaryJsonPath):
 
 class Intersect(BinaryJsonPath):
     def _find(self, match: Match) -> Iterable[Match]:
-        seen: set[Union[int, float, str]] = set()
+        seen: set[int | float | str] = set()
         for left_m in self.left.find(match):
             seen.add(hashable(left_m.value))
             if match.debug:
@@ -641,16 +641,10 @@ class Intersect(BinaryJsonPath):
 
 class Discard(BinaryJsonPath):
     def _find(self, match: Match) -> Iterable[Match]:
+        to_discard = set(hashable(right_m.value) for right_m
+                         in self.right.find(match))
         for left_m in self.left.find(match):
-            passed = True
-            for right_m in self.right.find(left_m):
-                if match.debug:
-                    debug_msg(self, match, f"!filtered out {right_m.value!r}")
-                passed = False
-                break
-            if passed:
-                if match.debug:
-                    debug_msg(self, match, f"found {left_m.value!r}")
+            if hashable(left_m.value) not in to_discard:
                 yield left_m
 
 

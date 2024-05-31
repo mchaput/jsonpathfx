@@ -296,23 +296,7 @@ def test_items():
 def test_discard():
     domain = [1, 2, 3, 4, 5]
     assert parse("*").values(domain) == domain
-    assert parse("* ! {@ == 2}").values(domain) == [1, 3, 4, 5]
-
-
-def test_discard2():
-    domain = {
-        "detail": ["d1", "d2"],
-        "prim": ["pr1"],
-        "point": ["p1", "p2"],
-        "vertex": ["v1", "v2"]
-    }
-    p = parse("items(){[0] == 'point'}")
-    assert p.values(domain) == [["point", ["p1", "p2"]]]
-
-    p = parse("items() ! ([0] == 'point')")
-    assert p.values(domain) == [["detail", ["d1", "d2"]],
-                                ["prim", ["pr1"]],
-                                ["vertex", ["v1", "v2"]]]
+    assert parse("* ! *{@ == 2}").values(domain) == [1, 3, 4, 5]
 
 
 def test_parse_math():
@@ -388,6 +372,8 @@ def test_wildcards():
     assert parse("a*").values(domain) == [1, 2, 3]
     assert parse("*a").values(domain) == [3, 5]
     assert parse("*a*").values(domain) == [1, 2, 3, 5, 6]
+
+    assert parse("a* ! *a").values(domain) == [1, 2]
 
 
 def test_index():
