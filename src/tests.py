@@ -376,6 +376,20 @@ def test_key():
     assert parse("bazz").values(domain) == []
 
 
+def test_wildcards():
+    domain = {
+        "abb": 1,
+        "aab": 2,
+        "aba": 3,
+        "bbb": 4,
+        "baa": 5,
+        "bab": 6,
+    }
+    assert parse("a*").values(domain) == [1, 2, 3]
+    assert parse("*a").values(domain) == [3, 5]
+    assert parse("*a*").values(domain) == [1, 2, 3, 5, 6]
+
+
 def test_index():
     domain = {
         "foo": [5, 7, 10],

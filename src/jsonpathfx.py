@@ -29,6 +29,7 @@ import enum
 import operator
 import re
 import sys
+import fnmatch
 from typing import (Any, Callable, Iterable, NamedTuple, Optional, Pattern,
                     Sequence, Union)
 
@@ -721,6 +722,16 @@ class Wildcard(JsonPath):
 
     def __repr__(self):
         return f"{type(self).__name__}({self.pattern!r})"
+
+    def _find(self, match: Match) -> Iterable[Match]:
+        expr = re.compile(fnmatch.translate(self.pattern))
+        this = match.value
+        if isinstance(this, dict):
+            for key in this:
+                if expr.match(key):
+                    yield match.push_parent(key, this[key])
+        elif match.debug:
+            debug_msg(self, match, f"!inappropriate type: {this!r}")
 
 
 class Index(JsonPath):
