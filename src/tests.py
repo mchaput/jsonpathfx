@@ -765,3 +765,26 @@ def test_capture_none():
     }
     p = parse("$.groups.comp:(primitive|edge|point|vertex).*")
     assert p.values(doc) == []
+
+
+def test_find_from():
+    doc = {
+        "foo": [
+            {"x": 1, "y": 2},
+            {"x": 3, "y": 4},
+        ],
+        "bar": [
+            {"x": 7, "y": 8},
+        ]
+    }
+    p1 = parse("$.*.*")
+    assert p1.values(doc) == [
+        {"x": 1, "y": 2},
+        {"x": 3, "y": 4},
+        {"x": 7, "y": 8},
+    ]
+    p2 = parse("@.y")
+    results = []
+    for m in p1.find(doc):
+        results.extend(p2.values(m))
+    assert results == [2, 4, 8]
